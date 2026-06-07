@@ -1,0 +1,14 @@
+diff --git a/node_modules/http-mitm-proxy/lib/ca.js b/node_modules/http-mitm-proxy/lib/ca.js
+index beb573e..6ca75e6 100644
+--- a/node_modules/http-mitm-proxy/lib/ca.js
++++ b/node_modules/http-mitm-proxy/lib/ca.js
+@@ -205,7 +205,8 @@ CA.prototype.generateServerCertificateKeys = function (hosts, cb) {
+   certServer.validity.notBefore = new Date();
+   certServer.validity.notBefore.setDate(certServer.validity.notBefore.getDate() - 1);
+   certServer.validity.notAfter = new Date();
+-  certServer.validity.notAfter.setFullYear(certServer.validity.notBefore.getFullYear() + 2);
++  // 叶子证书有效期必须 <=398 天，否则 Chrome/Edge 报 ERR_CERT_VALIDITY_TOO_LONG
++  certServer.validity.notAfter.setDate(certServer.validity.notBefore.getDate() + 397);
+   var attrsServer = ServerAttrs.slice(0);
+   attrsServer.unshift({
+     name: 'commonName',

@@ -1,0 +1,27 @@
+# 依赖与运行时
+node_modules/
+certs/
+settings.json
+reporter-queue.json
+rules.json
+*.log
+
+# 打包输出
+dist/
+
+# 本地/IDE 配置
+.claude/
+.idea/
+
+# 临时草稿 / 抓包数据资料
+_*
+*.tmp
+codebuddy*.txt
+新建*.txt
+docjpg/.idea/
+docjpg/codebuddy/
+docjpg/*.jpg
+docjpg/*.png
+
+# 误建的嵌套目录
+/proxy-inspector/

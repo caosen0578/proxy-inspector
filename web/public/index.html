@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Proxy Inspector</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13px; background: #0f1117; color: #c9d1d9; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+/* ── Header ── */
+header { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: #161b22; border-bottom: 1px solid #30363d; flex-shrink: 0; }
+header h1 { font-size: 15px; font-weight: 600; color: #58a6ff; }
+header .badge { background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 2px 8px; font-size: 11px; color: #8b949e; }
+header .badge span { color: #3fb950; font-weight: 600; }
+.spacer { flex: 1; }
+button { cursor: pointer; border: none; border-radius: 6px; padding: 4px 12px; font-size: 12px; }
+.btn-danger { background: #da3633; color: #fff; }
+.btn-primary { background: #238636; color: #fff; }
+.btn-secondary { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; }
+
+/* ── Layout ── */
+.layout { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Left: traffic list ── */
+.traffic-panel { width: 55%; display: flex; flex-direction: column; border-right: 1px solid #30363d; }
+.filter-bar { display: flex; gap: 6px; padding: 8px; background: #161b22; border-bottom: 1px solid #30363d; }
+.filter-bar input, .filter-bar select { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; padding: 4px 8px; font-size: 12px; }
+.filter-bar input { flex: 1; }
+.traffic-list { flex: 1; overflow-y: auto; }
+table { width: 100%; border-collapse: collapse; }
+thead th { background: #161b22; padding: 6px 8px; text-align: left; font-weight: 500; color: #8b949e; border-bottom: 1px solid #30363d; position: sticky; top: 0; z-index: 1; }
+tbody tr { cursor: pointer; border-bottom: 1px solid #21262d; }
+tbody tr:hover { background: #161b22; }
+tbody tr.selected { background: #1c2a3a; }
+tbody td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.method { font-weight: 600; font-size: 11px; padding: 2px 5px; border-radius: 4px; }
+.GET  { background: #1a3a2a; color: #3fb950; }
+.POST { background: #3a2a1a; color: #f0883e; }
+.PUT  { background: #2a2a3a; color: #a371f7; }
+.DELETE { background: #3a1a1a; color: #f85149; }
+.CONNECT { background: #1a2a3a; color: #58a6ff; }
+.s2xx { color: #3fb950; } .s3xx { color: #58a6ff; } .s4xx { color: #f0883e; } .s5xx { color: #f85149; } .s0 { color: #8b949e; }
+
+/* ── Right: detail + rules tabs ── */
+.right-panel { flex: 1; display: flex; flex-direction: column; }
+.tabs { display: flex; background: #161b22; border-bottom: 1px solid #30363d; }
+.tab { padding: 8px 16px; cursor: pointer; color: #8b949e; border-bottom: 2px solid transparent; font-size: 12px; }
+.tab.active { color: #c9d1d9; border-bottom-color: #58a6ff; }
+.tab-content { flex: 1; overflow-y: auto; display: none; }
+.tab-content.active { display: block; }
+
+/* Detail panel */
+.detail-empty { display: flex; align-items: center; justify-content: center; height: 200px; color: #8b949e; }
+.section { padding: 12px 16px; border-bottom: 1px solid #21262d; }
+.section h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #8b949e; margin-bottom: 8px; }
+.kv-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.kv-table td { padding: 3px 6px; vertical-align: top; }
+.kv-table td:first-child { color: #8b949e; width: 40%; word-break: break-all; }
+.kv-table td:last-child { color: #e6edf3; word-break: break-all; }
+.body-pre { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px; font-family: 'Consolas', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; color: #e6edf3; margin-top: 4px; max-height: 300px; overflow-y: auto; }
+
+/* Rules panel */
+.rules-toolbar { padding: 8px 12px; border-bottom: 1px solid #30363d; display: flex; gap: 8px; align-items: center; }
+.rule-form { background: #161b22; border: 1px solid #30363d; border-radius: 8px; margin: 12px; padding: 12px; display: none; }
+.rule-form.open { display: block; }
+.rule-form label { display: block; color: #8b949e; font-size: 11px; margin-bottom: 3px; margin-top: 8px; }
+.rule-form input, .rule-form select, .rule-form textarea { width: 100%; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; padding: 5px 8px; font-size: 12px; }
+.rule-form textarea { font-family: monospace; height: 60px; resize: vertical; }
+.rule-form .form-actions { margin-top: 10px; display: flex; gap: 8px; }
+.rules-list { padding: 8px 12px; }
+.rule-item { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; display: flex; align-items: flex-start; gap: 10px; }
+.rule-item .rule-info { flex: 1; }
+.rule-item .pattern { font-family: monospace; color: #58a6ff; font-size: 12px; }
+.rule-item .meta { color: #8b949e; font-size: 11px; margin-top: 3px; }
+.rule-item .rule-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.toggle { width: 32px; height: 18px; background: #30363d; border-radius: 9px; position: relative; cursor: pointer; flex-shrink: 0; margin-top: 2px; }
+.toggle.on { background: #238636; }
+.toggle::after { content:''; position:absolute; width:14px;height:14px; background:#fff; border-radius:50%; top:2px; left:2px; transition:.15s; }
+.toggle.on::after { left:16px; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+
+/* Queue panel */
+.qstat { flex:1; min-width:90px; background:#161b22; border:1px solid #30363d; border-radius:8px; padding:10px 12px; text-align:center; }
+.qstat-num { font-size:22px; font-weight:700; }
+.qstat-label { font-size:11px; color:#8b949e; margin-top:2px; }
+.qbadge { font-size:11px; padding:2px 6px; border-radius:4px; font-weight:600; }
+.qb-pending { background:#132a3a; color:#58a6ff; }
+.qb-sending { background:#33280a; color:#d29922; }
+.qb-failed  { background:#3a1a1a; color:#f85149; }
+
+/* Rules help / examples */
+.rules-help { padding:14px 16px; border-top:1px solid #21262d; margin-top:8px; }
+.rules-help h3 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:#8b949e; margin:0 0 8px; }
+.eg-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:10px; }
+.eg-card { background:#0d1117; border:1px solid #30363d; border-radius:8px; padding:10px 12px; }
+.eg-title { font-size:13px; color:#c9d1d9; font-weight:600; margin-bottom:4px; }
+.eg-desc { font-size:11px; color:#8b949e; margin-bottom:6px; line-height:1.5; }
+.eg-card code { display:block; font-size:11px; color:#7ee787; background:#161b22; border-radius:4px; padding:5px 7px; margin-bottom:8px; word-break:break-all; }
+.eg-card button { font-size:12px; padding:3px 10px; }
+.help-ul { font-size:12px; color:#c9d1d9; line-height:1.7; padding-left:18px; margin:0; }
+.help-ul ul { padding-left:18px; }
+.help-ul code { background:#161b22; padding:1px 4px; border-radius:3px; color:#79c0ff; }
+
+/* Detail section header + copy button */
+.sec-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.copy-btn { background:#21262d; border:1px solid #30363d; color:#8b949e; font-size:11px; padding:2px 10px; border-radius:5px; cursor:pointer; font-family:inherit; }
+.copy-btn:hover { border-color:#8b949e; color:#c9d1d9; }
+.copy-btn.copied { background:#1a3a1f; border-color:#3fb950; color:#3fb950; }
+
+/* Traffic type column + bottom filter chips */
+.type-badge { display:inline-block; font-size:10px; font-weight:600; padding:0 5px; border:1px solid; border-radius:4px; line-height:16px; }
+.type-filter-bar { display:flex; flex-wrap:wrap; gap:6px; padding:8px 10px; border-top:1px solid #30363d; background:#0d1117; }
+.type-chip { font-size:11px; padding:2px 9px; border-radius:12px; border:1px solid #30363d; color:#8b949e; cursor:pointer; user-select:none; }
+.type-chip:hover { border-color:#8b949e; }
+.type-chip.active { background:var(--c,#1f6feb); border-color:var(--c,#1f6feb); color:#0d1117; font-weight:600; }
+
+/* Mapping editor */
+.map-table { width:100%; border-collapse:collapse; font-size:12px; }
+.map-table th { text-align:left; color:#8b949e; font-weight:500; padding:4px 6px; border-bottom:1px solid #30363d; }
+.map-table td { padding:3px 6px; vertical-align:middle; }
+.map-table input, .map-table select { width:100%; background:#0d1117; border:1px solid #30363d; color:#c9d1d9; border-radius:4px; padding:3px 5px; font-size:12px; font-family:inherit; }
+.map-table input.fieldname { color:#79c0ff; font-weight:600; }
+.map-del { cursor:pointer; color:#8b949e; padding:0 4px; }
+.map-del:hover { color:#f85149; }
+.map-table td.meta { color:#8b949e; font-size:11px; }
+.map-table td.example { color:#7d8590; font-size:11px; font-family:ui-monospace,monospace; }
+.req-yes { color:#f0883e; font-weight:600; }
+.req-no { color:#6e7681; }
+.seg-btn { background:#161b22; border:1px solid #30363d; color:#8b949e; padding:5px 12px; border-radius:6px; cursor:pointer; font-size:12px; font-family:inherit; }
+.seg-btn.active { background:#1f6feb; border-color:#1f6feb; color:#fff; }
+.colchk { display:inline-flex; align-items:center; gap:3px; cursor:pointer; }
+.colchk input { cursor:pointer; }
+
+/* Modal */
+.modal-mask { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; z-index:100; }
+.modal-mask.open { display:flex; }
+.modal { background:#0f1117; border:1px solid #30363d; border-radius:10px; width:min(820px,92vw); max-height:88vh; display:flex; flex-direction:column; }
+.modal-head { display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid #30363d; }
+.modal-head h2 { font-size:14px; color:#58a6ff; }
+.modal-body { overflow-y:auto; padding:4px 0; }
+.modal-close { cursor:pointer; color:#8b949e; font-size:16px; }
+
+/* WS indicator */
+.ws-dot { width: 8px; height: 8px; border-radius: 50%; background: #f85149; flex-shrink: 0; }
+.ws-dot.connected { background: #3fb950; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚡ Proxy Inspector</h1>
+  <div class="badge">代理端口 <span id="proxyPort">-</span></div>
+  <div class="badge">流量 <span id="trafficCount">0</span></div>
+  <div class="badge">规则 <span id="ruleCount">0</span></div>
+  <div class="badge">上送 <span id="reporterState">关</span></div>
+  <div class="ws-dot" id="wsDot" title="WebSocket 状态"></div>
+  <div class="spacer"></div>
+  <div id="umBox" title="UM 号 = 系统用户名，作为上送 createdBy（统计个人代码生成率）。点击可修改" style="display:flex;align-items:center;gap:6px;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer" onclick="editUm()">
+    <span style="color:#8b949e">UM</span>
+    <span id="umValue" style="color:#79c0ff;font-weight:600">…</span>
+    <span style="color:#6e7681;font-size:11px">✎</span>
+  </div>
+  <div id="hdrReporter" title="报文上送总开关。详细配置见「上送设置」标签页" style="display:flex;align-items:center;gap:7px;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer" onclick="toggleHeaderReporter()">
+    <span style="color:#8b949e">上送</span>
+    <div class="toggle" id="hdrReporterToggle"></div>
+    <span id="hdrReporterLabel" style="color:#8b949e;font-weight:600">关</span>
+  </div>
+  <a href="/api/ca.cer" download class="btn-secondary" style="text-decoration:none;padding:4px 12px;font-size:12px;border-radius:6px" title="下载后安装为受信任根证书，解决 HTTPS 不安全提示">⬇ 下载根证书</a>
+  <button class="btn-danger" onclick="clearTraffic()">清空流量</button>
+</header>
+
+<!-- 证书提示横幅 -->
+<div id="certBanner" style="background:#2d1f00;border-bottom:1px solid #f0883e44;padding:6px 16px;font-size:12px;color:#f0883e;display:flex;align-items:center;gap:10px;flex-shrink:0">
+  <span>⚠ HTTPS 抓包需要信任根证书：</span>
+  <a href="/api/ca.cer" download style="color:#58a6ff">⬇ Windows (.cer)</a>
+  <a href="/api/ca.pem" download style="color:#58a6ff">⬇ macOS/Linux (.pem)</a>
+  <span style="color:#8b949e">→ Windows：双击 .cer → 安装到「受信任的根证书颁发机构」&nbsp;|&nbsp;macOS：钥匙串 → 导入 → 始终信任</span>
+  <div class="spacer"></div>
+  <span style="cursor:pointer;color:#8b949e" onclick="document.getElementById('certBanner').style.display='none'">✕</span>
+</div>
+
+<div class="layout">
+  <!-- 左侧流量列表 -->
+  <div class="traffic-panel">
+    <div class="filter-bar">
+      <input id="filterUrl" placeholder="URL 过滤..." oninput="applyFilter()">
+      <select id="filterMethod" onchange="applyFilter()">
+        <option value="">全部方法</option>
+        <option>GET</option><option>POST</option><option>PUT</option>
+        <option>DELETE</option><option>PATCH</option><option>CONNECT</option>
+      </select>
+      <select id="filterStatus" onchange="applyFilter()">
+        <option value="">全部状态</option>
+        <option value="2">2xx</option><option value="3">3xx</option>
+        <option value="4">4xx</option><option value="5">5xx</option>
+      </select>
+    </div>
+    <div class="traffic-list">
+      <table>
+        <thead><tr>
+          <th style="width:40px">#</th>
+          <th style="width:52px">方法</th>
+          <th style="width:44px">协议</th>
+          <th style="width:120px">Host</th>
+          <th style="width:64px">类型</th>
+          <th>URL</th>
+          <th style="width:44px">状态</th>
+          <th style="width:56px">耗时</th>
+        </tr></thead>
+        <tbody id="trafficBody"></tbody>
+      </table>
+    </div>
+    <div class="type-filter-bar" id="typeFilterBar"></div>
+  </div>
+
+  <!-- 右侧：详情 + 规则 -->
+  <div class="right-panel">
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('detail')">报文详情</div>
+      <div class="tab" onclick="switchTab('rules')">规则管理</div>
+      <div class="tab" onclick="switchTab('report')">上送设置</div>
+      <div class="tab" onclick="switchTab('mapping')">字段映射</div>
+      <div class="tab" onclick="switchTab('queue')">上送队列 <span id="queueBadge" style="display:none;background:#f0883e;color:#000;border-radius:8px;padding:0 6px;font-size:10px;font-weight:600;margin-left:2px">0</span></div>
+    </div>
+
+    <div id="tab-detail" class="tab-content active">
+      <div id="detailEmpty" class="detail-empty">← 点击左侧请求查看详情</div>
+      <div id="detailContent" style="display:none"></div>
+    </div>
+
+    <div id="tab-rules" class="tab-content">
+      <div class="rules-toolbar">
+        <button class="btn-primary" onclick="toggleRuleForm()">+ 添加规则</button>
+        <span style="color:#8b949e;font-size:12px">规则按顺序匹配，命中第一条</span>
+      </div>
+      <div class="rule-form" id="ruleForm">
+        <label>URL 匹配模式（支持 * 通配符 或 /正则/）</label>
+        <input id="fPattern" placeholder="*api.example.com*">
+        <label>HTTP 方法</label>
+        <select id="fMethod"><option value="*">*（全部）</option><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option></select>
+        <label>动作</label>
+        <select id="fAction" onchange="onActionChange()">
+          <option value="mock">Mock 响应</option>
+          <option value="modify">修改请求/响应头</option>
+          <option value="block">阻断请求</option>
+        </select>
+        <div id="mockFields">
+          <label>Mock 状态码</label>
+          <input id="fMockStatus" placeholder="200" value="200">
+          <label>Content-Type</label>
+          <input id="fMockCT" placeholder="application/json" value="application/json">
+          <label>Mock Body</label>
+          <textarea id="fMockBody" placeholder='{"code":0,"msg":"mock"}'></textarea>
+        </div>
+        <div id="modifyFields" style="display:none">
+          <label>追加请求头（JSON）</label>
+          <textarea id="fReqHeaders" placeholder='{"X-Debug":"true"}'></textarea>
+          <label>追加响应头（JSON）</label>
+          <textarea id="fRespHeaders" placeholder='{"Access-Control-Allow-Origin":"*"}'></textarea>
+        </div>
+        <div class="form-actions">
+          <button class="btn-primary" onclick="saveRule()">保存</button>
+          <button class="btn-secondary" onclick="toggleRuleForm()">取消</button>
+        </div>
+      </div>
+      <div class="rules-list" id="rulesList"></div>
+
+      <!-- 示例案例 + 使用说明 -->
+      <div class="rules-help">
+        <h3>示例案例（点击「填入表单」参考）</h3>
+        <div class="eg-list">
+          <div class="eg-card">
+            <div class="eg-title">① Mock 一个接口返回固定 JSON</div>
+            <div class="eg-desc">后端没就绪时用假数据联调。命中的请求不转发，直接返回你设的 body。</div>
+            <code>*/v1/chat/completions  →  Mock 200 {"reply":"hello"}</code>
+            <button class="btn-secondary" onclick="fillRuleExample('mock')">填入表单</button>
+          </div>
+          <div class="eg-card">
+            <div class="eg-title">② 给请求注入鉴权头</div>
+            <div class="eg-desc">请求正常转发，额外加上 Header（如临时 token、调试标记）。</div>
+            <code>*api.example.com*  →  加请求头 {"Authorization":"Bearer xxx"}</code>
+            <button class="btn-secondary" onclick="fillRuleExample('modify')">填入表单</button>
+          </div>
+          <div class="eg-card">
+            <div class="eg-title">③ 给响应加 CORS 头</div>
+            <div class="eg-desc">本地跨域调试时，给响应补上 Access-Control-Allow-Origin。</div>
+            <code>*  →  加响应头 {"Access-Control-Allow-Origin":"*"}</code>
+            <button class="btn-secondary" onclick="fillRuleExample('cors')">填入表单</button>
+          </div>
+          <div class="eg-card">
+            <div class="eg-title">④ 阻断遥测/广告请求</div>
+            <div class="eg-desc">命中的请求直接返回 403，不放行。可屏蔽埋点/统计/广告。</div>
+            <code>*telemetry*  →  阻断（403）</code>
+            <button class="btn-secondary" onclick="fillRuleExample('block')">填入表单</button>
+          </div>
+        </div>
+
+        <h3 style="margin-top:16px">使用说明</h3>
+        <ul class="help-ul">
+          <li><b>用途</b>：在代理转发时拦截/改写请求，与「上送埋点」相互独立，按需使用。</li>
+          <li><b>匹配</b>：URL 模式支持子串、<code>*</code> 通配符、<code>/正则/</code>；可限定 HTTP 方法。<b>按顺序匹配，命中第一条即生效。</b></li>
+          <li><b>三种动作</b>：
+            <ul>
+              <li><b>Mock 响应</b> —— 不转发真实服务器，直接返回设定的状态码 / Content-Type / Body。</li>
+              <li><b>修改请求/响应头</b> —— 正常转发，额外追加（覆盖）Header，填 JSON。</li>
+              <li><b>阻断请求</b> —— 直接返回 403。</li>
+            </ul>
+          </li>
+          <li>每条规则可单独<b>启用/禁用</b>（左侧开关），无需删除即可临时关闭。</li>
+          <li>规则保存后立即生效，对随后经过代理（<code>127.0.0.1:8899</code>）的流量起作用。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div id="tab-report" class="tab-content">
+      <div class="rule-form open" style="display:block">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+          <div class="toggle" id="reportToggle" onclick="toggleReporter()"></div>
+          <span id="reportToggleLabel" style="font-size:13px;color:#c9d1d9">报文上送：关闭</span>
+        </div>
+        <p style="color:#8b949e;font-size:11px;margin:4px 0 8px">关闭时不向平台上送任何报文（抓包与界面展示不受影响）。</p>
+
+        <label>上送格式</label>
+        <select id="reportFormat" onchange="onReportFormatChange()">
+          <option value="behavior">behavior — 映射为用户行为埋点接口（saveRecord）</option>
+          <option value="raw">raw — 原始报文批量 POST</option>
+        </select>
+
+        <!-- behavior 模式：埋点平台 -->
+        <div id="behaviorFields">
+          <label>埋点平台 BaseURL</label>
+          <input id="reportBaseUrl" placeholder="http://appdes.fat.qa.pab.com.cn">
+          <p style="color:#8b949e;font-size:11px;margin:2px 0 0">实际上送地址 = BaseURL + <code>/api/userBehavior/saveRecord</code></p>
+          <label>apiToken（鉴权头）</label>
+          <input id="reportToken" placeholder="向 ex-pengqisheng835 申请">
+          <label>pluginVersion 默认值（triggerVersion）</label>
+          <input id="reportTriggerVersion" placeholder="proxy-inspector">
+        </div>
+
+        <!-- raw 模式：直接 POST 地址 -->
+        <div id="rawFields" style="display:none">
+          <label>上送接口地址</label>
+          <input id="reportUrl" placeholder="https://code-stat.company.com/api/report">
+        </div>
+
+        <label>URL 过滤白名单（每行一条，留空 = 上送全部）</label>
+        <textarea id="reportFilters" style="height:100px" placeholder="# 命中任意一条才上送&#10;*/chat/completions*&#10;*glm*"></textarea>
+        <p style="color:#8b949e;font-size:11px;margin-top:4px">
+          每行支持：子串包含（如 <code>/v1/chat</code>）、通配符（如 <code>*glm*</code>）、正则（如 <code>/embeddings|completion/</code>）。命中任意一行即上送。
+        </p>
+
+        <label style="margin-top:10px">低延迟直通 URL（每行一条，延迟敏感的流式接口）</label>
+        <textarea id="reportPassthrough" style="height:60px" placeholder="*/completions*"></textarea>
+        <p style="color:#8b949e;font-size:11px;margin-top:4px">
+          匹配的请求走<b>快速通道</b>：不强制 gzip、关闭 Nagle、转发零处理，尽量不破坏 IDE 的行内代码补全回写。<b>采集与上送照常</b>。默认 <code>*/completions*</code>（覆盖代码补全/对话两个接口）。
+        </p>
+
+        <div class="form-actions">
+          <button class="btn-primary" onclick="saveReportSettings()">保存设置</button>
+          <span id="reportSaved" style="color:#3fb950;font-size:12px;align-self:center;display:none">✓ 已保存</span>
+        </div>
+        <p style="color:#8b949e;font-size:11px;margin-top:8px">字段映射在「字段映射」标签页配置；本页只配上送目标与鉴权。</p>
+      </div>
+    </div>
+
+    <div id="tab-mapping" class="tab-content">
+      <div style="padding:12px 16px">
+        <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+          <button class="seg-btn active" id="seg-saveRecord" onclick="switchTarget('saveRecord')">新增记录 saveRecord</button>
+          <button class="seg-btn" id="seg-updateRecordForAccept" onclick="switchTarget('updateRecordForAccept')">更新采纳 updateRecordForAccept</button>
+        </div>
+        <p style="color:#8b949e;font-size:11px;margin:0 0 8px" id="targetHint"></p>
+        <div style="background:#0d2818;border:1px solid #238636;border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:11px;color:#7ee787">
+          ℹ 来源 <code>resText</code> + transform <code>sseContent</code> = <b>SSE 流式解析后的拼接结果</b>（逐分片取 <code>delta.content</code> 对话 / <code>choices[].text</code> 补全，自动剥离 <code>data:</code>、<code>[DONE]</code> 与思考链）。<code>result</code> / <code>acceptResult</code> 即用此方式取解析后的纯文本，非 SSE 原文。
+        </div>
+        <div style="display:flex;gap:10px;margin-bottom:8px;flex-wrap:wrap;align-items:flex-end">
+          <div style="flex:1;min-width:220px">
+            <label>触发该上送的抓包 URL 规则（空 = 全部；子串 / *通配* / /正则/）</label>
+            <input id="targetMatch" placeholder="如 */chat/completions*" oninput="onTargetMatchEdit()">
+          </div>
+        </div>
+        <div style="display:flex;gap:14px;align-items:center;margin-bottom:8px;flex-wrap:wrap;font-size:12px;color:#8b949e">
+          <span>显示列：</span>
+          <label class="colchk"><input type="checkbox" id="col-type" checked onchange="renderTargetTable()"> 类型</label>
+          <label class="colchk"><input type="checkbox" id="col-required" checked onchange="renderTargetTable()"> 必填</label>
+          <label class="colchk"><input type="checkbox" id="col-example" onchange="renderTargetTable()"> 示例值</label>
+          <label class="colchk"><input type="checkbox" id="col-desc" checked onchange="renderTargetTable()"> 描述</label>
+          <label class="colchk"><input type="checkbox" id="col-onlymapped" onchange="renderTargetTable()"> 仅看已映射</label>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+          <button class="btn-primary" onclick="saveMapping()">保存映射</button>
+          <button class="btn-secondary" onclick="resetMappingToPreset()">必填项重置为 CodeBuddy 预设</button>
+          <button class="btn-secondary" onclick="previewMapping()">▶ 预览（匹配的流量）</button>
+          <span id="mappingSaved" style="color:#3fb950;font-size:12px;display:none">✓ 已保存</span>
+        </div>
+        <table class="map-table">
+          <thead><tr id="mapHead"></tr></thead>
+          <tbody id="mappingBody"></tbody>
+        </table>
+        <div class="section" style="margin-top:14px">
+          <h3>预览结果 <span id="mappingPreviewMeta" style="color:#8b949e;font-weight:400"></span></h3>
+          <pre class="body-pre" id="mappingPreview" style="min-height:40px">点「预览」查看按当前映射算出的上送报文体</pre>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-queue" class="tab-content">
+      <div style="padding:12px 16px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+          <div class="qstat"><div class="qstat-num" id="qPending" style="color:#58a6ff">0</div><div class="qstat-label">待送</div></div>
+          <div class="qstat"><div class="qstat-num" id="qSending" style="color:#d29922">0</div><div class="qstat-label">发送中</div></div>
+          <div class="qstat"><div class="qstat-num" id="qFailed" style="color:#f85149">0</div><div class="qstat-label">失败待重试</div></div>
+          <div class="qstat"><div class="qstat-num" id="qSent" style="color:#3fb950">0</div><div class="qstat-label">本次已送达</div></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+          <button class="btn-primary" onclick="retryQueue()">重试失败项</button>
+          <button class="btn-secondary" onclick="backfillQueue()" title="把抓包列表里漏送的历史报文（匹配过滤、已完成、未送过）重新入队">补送历史报文</button>
+          <button class="btn-danger" onclick="clearQueue()">清空队列</button>
+          <span style="color:#8b949e;font-size:11px">队列已持久化到磁盘，应用重启后自动恢复未完成任务</span>
+        </div>
+        <p style="color:#8b949e;font-size:11px;margin:-4px 0 10px">「补送历史报文」用于上送开关开晚了的补救：从当前抓包列表（内存最近 500 条）里捞回漏送的报文。需先在「上送设置」开启上送并配好目标。</p>
+
+        <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8b949e;margin:14px 0 6px">待处理队列</h3>
+        <table>
+          <thead><tr><th style="width:48px">#</th><th style="width:70px">状态</th><th>URL</th><th style="width:48px">重试</th></tr></thead>
+          <tbody id="queueBody"></tbody>
+        </table>
+        <div id="queueEmpty" style="color:#8b949e;padding:12px 0;font-size:12px">队列为空</div>
+
+        <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8b949e;margin:16px 0 6px">最近送达</h3>
+        <table>
+          <thead><tr><th style="width:48px">#</th><th>URL</th><th style="width:120px">时间</th></tr></thead>
+          <tbody id="historyBody"></tbody>
+        </table>
+        <div id="historyEmpty" style="color:#8b949e;padding:12px 0;font-size:12px">暂无</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 队列条目报文预览弹窗 -->
+<div class="modal-mask" id="queueModal" onclick="if(event.target===this)closeQueueModal()">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="qmTitle">上送报文预览</h2>
+      <div class="spacer"></div>
+      <span class="modal-close" onclick="closeQueueModal()">✕</span>
+    </div>
+    <div class="modal-body" id="qmBody"></div>
+  </div>
+</div>
+
+<!-- SSE 格式解析弹窗 -->
+<div class="modal-mask" id="sseModal" onclick="if(event.target===this)closeSseModal()">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>SSE 流式解析结果</h2>
+      <div class="spacer"></div>
+      <span class="modal-close" onclick="closeSseModal()">✕</span>
+    </div>
+    <div class="modal-body" id="sseBody"></div>
+  </div>
+</div>
+
+<!-- 补送历史报文弹窗 -->
+<div class="modal-mask" id="backfillModal" onclick="if(event.target===this)closeBackfillModal()">
+  <div class="modal" style="width:min(720px,94vw)">
+    <div class="modal-head">
+      <h2>补送历史报文</h2>
+      <div class="spacer"></div>
+      <span class="modal-close" onclick="closeBackfillModal()">✕</span>
+    </div>
+    <div style="padding:8px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid #30363d">
+      <label class="colchk"><input type="checkbox" id="bfAll" onchange="bfToggleAll(this.checked)"> 全选</label>
+      <span id="bfMeta" style="color:#8b949e;font-size:12px"></span>
+      <div class="spacer"></div>
+      <button class="btn-primary" onclick="bfSubmit()">批量补送选中</button>
+    </div>
+    <div class="modal-body" id="bfBody" style="padding:0"></div>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────
+const state = { records: [], selectedId: null, filter: { url: '', method: '', status: '', type: '' } };
+let ws;
+
+// ── WebSocket ──────────────────────────────────────────
+function connectWS() {
+  ws = new WebSocket(`ws://${location.host}`);
+  ws.onopen = () => document.getElementById('wsDot').classList.add('connected');
+  ws.onclose = () => { document.getElementById('wsDot').classList.remove('connected'); setTimeout(connectWS, 2000); };
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'record') {
+      state.records.unshift(msg.data);
+      if (state.records.length > 500) state.records.length = 500;
+      renderTraffic();
+      updateCounts();
+    } else if (msg.type === 'record-update') {
+      const idx = state.records.findIndex(r => r.id === msg.data.id);
+      if (idx !== -1) { state.records[idx] = { ...state.records[idx], ...msg.data }; renderTraffic(); }
+      if (state.selectedId === msg.data.id) showDetail(msg.data.id);
+    } else if (msg.type === 'clear') {
+      state.records = []; state.selectedId = null; renderTraffic(); hideDetail();
+    } else if (msg.type === 'queue') {
+      renderQueue(msg.data);
+    }
+  };
+}
+
+// ── Traffic rendering ──────────────────────────────────
+// 资源类型归类（按响应 content-type，回退请求 accept）
+const TYPE_DEFS = [
+  ['sse',      'SSE',   '#d2a8ff', ct => ct.includes('event-stream')],
+  ['json',     'JSON',  '#79c0ff', ct => ct.includes('json')],
+  ['document', 'HTML',  '#58a6ff', ct => ct.includes('html')],
+  ['script',   'JS',    '#e3b341', ct => ct.includes('javascript') || ct.includes('ecmascript')],
+  ['css',      'CSS',   '#a5d6ff', ct => ct.includes('css')],
+  ['image',    'IMG',   '#56d364', ct => ct.startsWith('image/')],
+  ['font',     'FONT',  '#ffa657', ct => ct.includes('font')],
+  ['media',    'MEDIA', '#ff7b72', ct => ct.startsWith('audio/') || ct.startsWith('video/')],
+  ['text',     'TEXT',  '#8b949e', ct => ct.startsWith('text/')],
+];
+function recType(r) {
+  const h = r.responseHeaders || {};
+  let ct = (h['content-type'] || h['Content-Type'] || '').toLowerCase();
+  if (!ct) { const rh = r.requestHeaders || {}; ct = (rh['accept'] || rh['Accept'] || '').toLowerCase(); }
+  const hit = TYPE_DEFS.find(([, , , test]) => test(ct));
+  return hit ? hit[0] : 'other';
+}
+function typeMeta(type) {
+  const d = TYPE_DEFS.find(t => t[0] === type);
+  return d ? { label: d[1], color: d[2] } : { label: 'OTHER', color: '#6e7681' };
+}
+function recProto(r) { try { return new URL(r.url).protocol.replace(':', ''); } catch { return '-'; } }
+function recHost(r) { try { return new URL(r.url).host; } catch { return '-'; } }
+
+function applyFilter() {
+  state.filter.url = document.getElementById('filterUrl').value;
+  state.filter.method = document.getElementById('filterMethod').value;
+  state.filter.status = document.getElementById('filterStatus').value;
+  renderTraffic();
+}
+function setTypeFilter(type) {
+  state.filter.type = state.filter.type === type ? '' : type;
+  renderTraffic();
+}
+
+function filtered() {
+  return state.records.filter(r => {
+    if (state.filter.url && !r.url.includes(state.filter.url)) return false;
+    if (state.filter.method && r.method !== state.filter.method) return false;
+    if (state.filter.type && recType(r) !== state.filter.type) return false;
+    if (state.filter.status) {
+      const s = String(r.statusCode || 0)[0];
+      if (s !== state.filter.status) return false;
+    }
+    return true;
+  });
+}
+
+function renderTraffic() {
+  const tbody = document.getElementById('trafficBody');
+  const items = filtered();
+  tbody.innerHTML = items.map((r, i) => {
+    const tm = typeMeta(recType(r));
+    const seq = items.length - i; // 列表新→旧，最新序号最大（按时间顺序编号）
+    return `
+    <tr onclick="showDetail(${r.id})" class="${r.id === state.selectedId ? 'selected' : ''}">
+      <td style="color:#6e7681">${seq}</td>
+      <td><span class="method ${r.method}">${r.method}</span></td>
+      <td style="color:#8b949e;font-size:11px">${esc(recProto(r))}</td>
+      <td style="color:#8b949e" title="${esc(recHost(r))}">${esc(recHost(r))}</td>
+      <td><span class="type-badge" style="color:${tm.color};border-color:${tm.color}55">${tm.label}</span></td>
+      <td title="${esc(r.url)}">${esc(shortUrl(r.url))}</td>
+      <td class="${statusClass(r.statusCode)}">${r.statusCode || '…'}</td>
+      <td style="color:#8b949e">${r.duration != null ? r.duration + 'ms' : '…'}</td>
+    </tr>`;
+  }).join('');
+  renderTypeFilterBar();
+}
+
+// 底部类型过滤按钮（含各类型计数）
+function renderTypeFilterBar() {
+  const counts = {};
+  state.records.forEach(r => { const t = recType(r); counts[t] = (counts[t] || 0) + 1; });
+  const types = ['', ...TYPE_DEFS.map(t => t[0]), 'other'];
+  const bar = document.getElementById('typeFilterBar');
+  bar.innerHTML = types
+    .filter(t => t === '' || counts[t])  // 只显示有数据的类型 + 全部
+    .map(t => {
+      const active = state.filter.type === t ? ' active' : '';
+      if (t === '') return `<span class="type-chip${active}" onclick="setTypeFilter('')">全部 ${state.records.length}</span>`;
+      const tm = typeMeta(t);
+      return `<span class="type-chip${active}" style="--c:${tm.color}" onclick="setTypeFilter('${t}')">${tm.label} ${counts[t]}</span>`;
+    }).join('');
+}
+
+function shortUrl(url) {
+  try { const u = new URL(url); return u.pathname + (u.search || ''); } catch { return url; }
+}
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function statusClass(s) { if (!s) return 's0'; const d = String(s)[0]; return `s${d}xx`; }
+
+// ── Detail ─────────────────────────────────────────────
+let currentDetail = null;
+async function showDetail(id) {
+  state.selectedId = id;
+  renderTraffic();
+  const r = await fetch(`/api/traffic/${id}`).then(x => x.json());
+  currentDetail = r;
+  document.getElementById('detailEmpty').style.display = 'none';
+  const el = document.getElementById('detailContent');
+  el.style.display = '';
+  const sh = (title, kind) => `<div class="sec-head"><h3>${title}</h3><button class="copy-btn" onclick="copyDetail('${kind}',this)">复制</button></div>`;
+  el.innerHTML = `
+    <div class="section">
+      <div class="sec-head"><h3>基本信息</h3><button class="copy-btn" onclick="copyDetail('all',this)">复制全部报文</button></div>
+      <table class="kv-table">
+        <tr><td>URL</td><td>${esc(r.url)}</td></tr>
+        <tr><td>方法</td><td>${esc(r.method)}</td></tr>
+        <tr><td>状态</td><td class="${statusClass(r.statusCode)}">${r.statusCode || '-'}</td></tr>
+        <tr><td>耗时</td><td>${r.duration != null ? r.duration + ' ms' : '-'}</td></tr>
+        <tr><td>时间</td><td>${new Date(r.timestamp).toLocaleString()}</td></tr>
+      </table>
+    </div>
+    <div class="section">
+      ${sh('请求头','reqHeaders')}
+      ${headersHtml(r.requestHeaders)}
+    </div>
+    ${r.requestBody ? `<div class="section">${sh('请求 Body','reqBody')}<pre class="body-pre">${esc(tryFormat(r.requestBody))}</pre></div>` : ''}
+    <div class="section">
+      ${sh('响应头','resHeaders')}
+      ${headersHtml(r.responseHeaders)}
+    </div>
+    ${r.responseBody ? `<div class="section">
+      <div class="sec-head"><h3>响应 Body</h3><div style="display:flex;gap:6px">
+        ${isSSE(r.responseBody) ? `<button class="copy-btn" onclick="openSseParse()">⊞ SSE 格式解析</button>` : ''}
+        <button class="copy-btn" onclick="copyDetail('resBody',this)">复制</button>
+      </div></div>
+      <pre class="body-pre">${esc(tryFormat(r.responseBody))}</pre></div>` : ''}
+  `;
+}
+
+// 是否像 SSE 流（含 data: 行）
+function isSSE(body) { return typeof body === 'string' && /^\s*data:/m.test(body); }
+
+// 前端解析 SSE：拼正文/思考链 + 模型/结束原因/tokens + 分片
+function parseSseStream(raw) {
+  const chunks = [];
+  for (const line of String(raw).split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t.startsWith('data:')) continue;
+    const p = t.slice(5).trim();
+    if (!p || p === '[DONE]') continue;
+    try { chunks.push(JSON.parse(p)); } catch {}
+  }
+  let content = '', reasoning = '', model = null, finishReason = null, usage = null;
+  for (const c of chunks) {
+    const ch = c.choices && c.choices[0];
+    if (ch) {
+      const d = ch.delta || {};
+      content += (d.content) || (ch.text) || '';
+      reasoning += d.reasoning || d.reasoning_content || '';
+      if (ch.finish_reason) finishReason = ch.finish_reason;
+    }
+    if (c.model) model = c.model;
+    if (c.usage) usage = c.usage;
+  }
+  return { chunks, content, reasoning, model, finishReason, usage };
+}
+
+// OpenAI 流式协议校验：返回 {results:[{level,label,detail}], fails, warns, ok}
+function validateOpenAISSE(raw) {
+  const results = [];
+  const add = (level, label, detail) => results.push({ level, label, detail: detail || '' });
+  const lines = String(raw).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const dataLines = lines.filter(l => l.startsWith('data:'));
+  if (!dataLines.length) { add('fail', '存在 data: 行', '未找到任何 data: 行，不是 SSE 流'); return finish(); }
+  add('pass', '存在 data: 行', dataLines.length + ' 行');
+
+  const last = dataLines[dataLines.length - 1];
+  add(last === 'data: [DONE]' ? 'pass' : 'warn', '以 data: [DONE] 结尾',
+      last === 'data: [DONE]' ? '' : '末行：' + last.slice(0, 40) + '（流可能被截断）');
+
+  const chunks = []; let badJson = 0;
+  for (const l of dataLines) { const p = l.slice(5).trim(); if (p === '[DONE]') continue; try { chunks.push(JSON.parse(p)); } catch { badJson++; } }
+  add(badJson ? 'fail' : 'pass', 'data 块均为合法 JSON', badJson ? (badJson + ' 块解析失败') : (chunks.length + ' 块'));
+  if (!chunks.length) { add('fail', '含有效 chunk', '无可解析 chunk'); return finish(); }
+
+  const objs = [...new Set(chunks.map(c => c.object).filter(Boolean))];
+  if (!objs.length) add('warn', 'object 字段', 'chunk 缺少 object 字段');
+  else add(objs.every(o => o === 'chat.completion.chunk' || o === 'text_completion') ? 'pass' : 'warn', 'object 类型', objs.join(', '));
+
+  add(chunks.every(c => c.id != null) ? 'pass' : 'warn', '每个 chunk 有 id');
+  add(chunks.some(c => c.model != null) ? 'pass' : 'warn', '含 model 字段');
+  add(chunks.some(c => c.created != null) ? 'pass' : 'warn', '含 created 字段');
+  add(chunks.every(c => Array.isArray(c.choices)) ? 'pass' : 'fail', '每个 chunk 有 choices 数组');
+
+  let hasDelta = false, hasText = false, hasIndex = true;
+  for (const c of chunks) { const ch = c.choices && c.choices[0]; if (!ch) continue; if (ch.delta !== undefined) hasDelta = true; if (ch.text !== undefined) hasText = true; if (ch.index === undefined) hasIndex = false; }
+  if (hasDelta && !hasText) add('pass', '消息格式', '对话流 choices[].delta');
+  else if (hasText && !hasDelta) add('pass', '消息格式', '补全流 choices[].text');
+  else if (hasDelta && hasText) add('warn', '消息格式', '同时含 delta 与 text');
+  else add('fail', '消息格式', 'choices 既无 delta 也无 text');
+  add(hasIndex ? 'pass' : 'warn', 'choices[].index 存在');
+
+  const fr = chunks.map(c => c.choices && c.choices[0] && c.choices[0].finish_reason).filter(Boolean);
+  add(fr.length ? 'pass' : 'warn', '含 finish_reason', fr.length ? fr[fr.length - 1] : '未找到（流可能被截断）');
+
+  const usage = chunks.map(c => c.usage).filter(Boolean).pop();
+  if (usage) add(['prompt_tokens', 'completion_tokens', 'total_tokens'].every(k => usage[k] != null) ? 'pass' : 'warn', 'usage 字段完整', JSON.stringify(usage));
+  else add('info', 'usage', '未返回（需 stream_options.include_usage）');
+
+  function finish() {
+    const fails = results.filter(r => r.level === 'fail').length;
+    const warns = results.filter(r => r.level === 'warn').length;
+    return { results, fails, warns, ok: fails === 0 };
+  }
+  return finish();
+}
+const LEVEL_ICON = { pass: ['✓', '#3fb950'], warn: ['⚠', '#d29922'], fail: ['✗', '#f85149'], info: ['ℹ', '#8b949e'] };
+
+function openSseParse() {
+  if (!currentDetail || !currentDetail.responseBody) return;
+  const r = parseSseStream(currentDetail.responseBody);
+  const u = r.usage || {};
+  const v = validateOpenAISSE(currentDetail.responseBody);
+  const verdict = v.fails ? ['✗ 不符合 OpenAI 协议', '#f85149'] : v.warns ? ['⚠ 基本符合（有警告）', '#d29922'] : ['✓ 符合 OpenAI 流式协议', '#3fb950'];
+  const checkRows = v.results.map(it => {
+    const [icon, color] = LEVEL_ICON[it.level] || ['·', '#8b949e'];
+    return `<tr><td style="width:24px;color:${color};text-align:center">${icon}</td><td>${esc(it.label)}</td><td style="color:#8b949e">${esc(it.detail)}</td></tr>`;
+  }).join('');
+  document.getElementById('sseBody').innerHTML = `
+    <div class="section">
+      <h3>概要</h3>
+      <table class="kv-table">
+        <tr><td>模型</td><td>${esc(r.model || '-')}</td></tr>
+        <tr><td>结束原因</td><td>${esc(r.finishReason || '-')}</td></tr>
+        <tr><td>分片数</td><td>${r.chunks.length}</td></tr>
+        <tr><td>Tokens</td><td>prompt ${u.prompt_tokens ?? '-'} / completion ${u.completion_tokens ?? '-'} / total ${u.total_tokens ?? '-'}</td></tr>
+      </table>
+    </div>
+    <div class="section">
+      <div class="sec-head"><h3>拼接正文（content / text）</h3><button class="copy-btn" onclick="copyToClipboard(window.__sseContent||'').then(()=>{this.textContent='✓ 已复制';setTimeout(()=>this.textContent='复制',1200)})">复制</button></div>
+      <pre class="body-pre" style="white-space:pre-wrap">${esc(r.content) || '<span style=color:#8b949e>（无正文）</span>'}</pre>
+    </div>
+    ${r.reasoning ? `<div class="section"><h3>思考链（reasoning）</h3><pre class="body-pre" style="white-space:pre-wrap;color:#8b949e">${esc(r.reasoning)}</pre></div>` : ''}
+    <div class="section">
+      <h3>逐分片（${r.chunks.length}）</h3>
+      <pre class="body-pre">${esc(r.chunks.map((c,i)=>`#${i} `+JSON.stringify(c)).join('\n'))}</pre>
+    </div>
+    <div class="section">
+      <h3>OpenAI 协议校验　<span style="color:${verdict[1]};font-weight:600">${verdict[0]}</span></h3>
+      <table class="kv-table">${checkRows}</table>
+    </div>`;
+  window.__sseContent = r.content;
+  document.getElementById('sseModal').classList.add('open');
+}
+function closeSseModal() { document.getElementById('sseModal').classList.remove('open'); }
+
+function headersText(h) {
+  if (!h) return '';
+  return Object.entries(h).map(([k, v]) => `${k}: ${v}`).join('\n');
+}
+// 组装某段文本用于复制
+function detailText(kind, r) {
+  if (!r) return '';
+  switch (kind) {
+    case 'reqHeaders': return headersText(r.requestHeaders);
+    case 'reqBody':    return r.requestBody || '';
+    case 'resHeaders': return headersText(r.responseHeaders);
+    case 'resBody':    return r.responseBody || '';
+    case 'all': return [
+      `${r.method} ${r.url}`,
+      headersText(r.requestHeaders),
+      '', r.requestBody || '',
+      '', `HTTP ${r.statusCode || ''}`,
+      headersText(r.responseHeaders),
+      '', r.responseBody || '',
+    ].join('\n');
+    default: return '';
+  }
+}
+async function copyDetail(kind, btn) {
+  const text = detailText(kind, currentDetail);
+  const ok = await copyToClipboard(text);
+  const old = btn.textContent;
+  btn.textContent = ok ? '✓ 已复制' : '✗ 失败';
+  btn.classList.toggle('copied', ok);
+  setTimeout(() => { btn.textContent = old; btn.classList.remove('copied'); }, 1200);
+}
+// 复制到剪贴板（优先 Clipboard API，降级 execCommand）
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+  } catch {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy'); document.body.removeChild(ta); return ok;
+  } catch { return false; }
+}
+
+function hideDetail() {
+  document.getElementById('detailEmpty').style.display = '';
+  document.getElementById('detailContent').style.display = 'none';
+}
+
+function headersHtml(headers) {
+  if (!headers || !Object.keys(headers).length) return '<span style="color:#8b949e">无</span>';
+  return `<table class="kv-table">${Object.entries(headers).map(([k,v]) =>
+    `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>`;
+}
+
+function tryFormat(body) {
+  try { return JSON.stringify(JSON.parse(body), null, 2); } catch { return body; }
+}
+
+// ── Rules ──────────────────────────────────────────────
+async function loadRules() {
+  const rules = await fetch('/api/rules').then(x => x.json());
+  const el = document.getElementById('rulesList');
+  if (!rules.length) { el.innerHTML = '<div style="color:#8b949e;padding:16px">暂无规则</div>'; return; }
+  el.innerHTML = rules.map(rule => `
+    <div class="rule-item">
+      <div class="toggle ${rule.enabled ? 'on' : ''}" onclick="toggleRule('${rule.id}', ${!rule.enabled})"></div>
+      <div class="rule-info">
+        <div class="pattern">${esc(rule.pattern)}</div>
+        <div class="meta">${rule.method || '*'} · ${rule.action}${rule.mockStatus ? ' · ' + rule.mockStatus : ''}</div>
+      </div>
+      <div class="rule-actions">
+        <button class="btn-danger" onclick="deleteRule('${rule.id}')">删除</button>
+      </div>
+    </div>`).join('');
+}
+
+function toggleRuleForm() {
+  const f = document.getElementById('ruleForm');
+  f.classList.toggle('open');
+}
+
+function onActionChange() {
+  const a = document.getElementById('fAction').value;
+  document.getElementById('mockFields').style.display = a === 'mock' ? '' : 'none';
+  document.getElementById('modifyFields').style.display = a === 'modify' ? '' : 'none';
+}
+
+// 示例案例 → 填入表单（不自动保存，供参考/修改后再保存）
+function fillRuleExample(kind) {
+  const form = document.getElementById('ruleForm');
+  if (!form.classList.contains('open')) toggleRuleForm();
+  const set = (id, v) => { document.getElementById(id).value = v; };
+  const presets = {
+    mock:   { pattern:'*/v1/chat/completions', method:'*', action:'mock', mockStatus:'200', mockCT:'application/json', mockBody:'{"reply":"hello from mock"}' },
+    modify: { pattern:'*api.example.com*', method:'*', action:'modify', reqHeaders:'{"Authorization":"Bearer xxx"}', respHeaders:'' },
+    cors:   { pattern:'*', method:'*', action:'modify', reqHeaders:'', respHeaders:'{"Access-Control-Allow-Origin":"*"}' },
+    block:  { pattern:'*telemetry*', method:'*', action:'block' },
+  };
+  const p = presets[kind]; if (!p) return;
+  set('fPattern', p.pattern);
+  document.getElementById('fMethod').value = p.method;
+  document.getElementById('fAction').value = p.action;
+  onActionChange();
+  if (p.action === 'mock') { set('fMockStatus', p.mockStatus); set('fMockCT', p.mockCT); set('fMockBody', p.mockBody); }
+  if (p.action === 'modify') { set('fReqHeaders', p.reqHeaders || ''); set('fRespHeaders', p.respHeaders || ''); }
+  form.scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
+async function saveRule() {
+  const action = document.getElementById('fAction').value;
+  const body = {
+    pattern: document.getElementById('fPattern').value,
+    method: document.getElementById('fMethod').value,
+    action,
+  };
+  if (action === 'mock') {
+    body.mockStatus = +document.getElementById('fMockStatus').value || 200;
+    body.mockContentType = document.getElementById('fMockCT').value;
+    body.mockBody = document.getElementById('fMockBody').value;
+  } else if (action === 'modify') {
+    try { body.addRequestHeaders = JSON.parse(document.getElementById('fReqHeaders').value || '{}'); } catch { alert('请求头 JSON 格式错误'); return; }
+    try { body.addResponseHeaders = JSON.parse(document.getElementById('fRespHeaders').value || '{}'); } catch { alert('响应头 JSON 格式错误'); return; }
+  }
+  await fetch('/api/rules', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  toggleRuleForm();
+  loadRules();
+  updateCounts();
+}
+
+async function deleteRule(id) {
+  await fetch(`/api/rules/${id}`, { method: 'DELETE' });
+  loadRules();
+  updateCounts();
+}
+
+async function toggleRule(id, enabled) {
+  await fetch(`/api/rules/${id}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }) });
+  loadRules();
+}
+
+// ── Utils ──────────────────────────────────────────────
+async function clearTraffic() {
+  await fetch('/api/traffic', { method: 'DELETE' });
+  state.records = []; state.selectedId = null; renderTraffic(); hideDetail(); updateCounts();
+}
+
+async function updateCounts() {
+  const s = await fetch('/api/status').then(x => x.json());
+  document.getElementById('proxyPort').textContent = s.proxyPort;
+  document.getElementById('trafficCount').textContent = s.trafficCount;
+  document.getElementById('ruleCount').textContent = s.ruleCount;
+  const rs = document.getElementById('reporterState');
+  if (!s.reporterEnabled) rs.textContent = '关';
+  else rs.textContent = s.reporterFilterCount ? `开·${s.reporterFilterCount}条过滤` : '开·全部';
+  rs.style.color = s.reporterEnabled ? '#3fb950' : '#8b949e';
+}
+
+// ── 上送设置 ───────────────────────────────────────────
+let reportEnabled = false;
+async function loadReportSettings() {
+  const s = await fetch('/api/settings').then(x => x.json());
+  reportEnabled = !!s.reporterEnabled;
+  renderReportToggle();
+  document.getElementById('reportFormat').value = s.reporterFormat || 'behavior';
+  document.getElementById('reportBaseUrl').value = s.reporterBaseUrl || '';
+  document.getElementById('reportToken').value = s.reporterToken || '';
+  document.getElementById('reportTriggerVersion').value = s.reporterTriggerVersion || '';
+  document.getElementById('reportUrl').value = s.reporterUrl || '';
+  document.getElementById('reportFilters').value = (s.reporterFilters || []).join('\n');
+  document.getElementById('reportPassthrough').value = (s.streamPassthrough || []).join('\n');
+  onReportFormatChange();
+}
+function onReportFormatChange() {
+  const fmt = document.getElementById('reportFormat').value;
+  document.getElementById('behaviorFields').style.display = fmt === 'behavior' ? '' : 'none';
+  document.getElementById('rawFields').style.display = fmt === 'raw' ? '' : 'none';
+}
+
+function renderReportToggle() {
+  const t = document.getElementById('reportToggle');
+  if (t) {
+    t.classList.toggle('on', reportEnabled);
+    document.getElementById('reportToggleLabel').textContent = '报文上送：' + (reportEnabled ? '开启' : '关闭');
+  }
+  renderHeaderReporter();
+}
+
+// 顶部上送开关（与「上送设置」页同步）
+function renderHeaderReporter() {
+  const t = document.getElementById('hdrReporterToggle');
+  t.classList.toggle('on', reportEnabled);
+  const lbl = document.getElementById('hdrReporterLabel');
+  lbl.textContent = reportEnabled ? '开' : '关';
+  lbl.style.color = reportEnabled ? '#3fb950' : '#8b949e';
+}
+async function loadHeaderReporter() {
+  const s = await fetch('/api/settings').then(x => x.json());
+  reportEnabled = !!s.reporterEnabled;
+  renderHeaderReporter();
+}
+// 顶部开关点击：立即持久化（不依赖「保存设置」按钮）
+async function toggleHeaderReporter() {
+  reportEnabled = !reportEnabled;
+  renderReportToggle();
+  await fetch('/api/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reporterEnabled: reportEnabled }) });
+  updateCounts();
+}
+
+function toggleReporter() {
+  reportEnabled = !reportEnabled;
+  renderReportToggle();
+}
+
+async function saveReportSettings() {
+  const body = {
+    reporterEnabled: reportEnabled,
+    reporterFormat: document.getElementById('reportFormat').value,
+    reporterBaseUrl: document.getElementById('reportBaseUrl').value,
+    reporterToken: document.getElementById('reportToken').value,
+    reporterTriggerVersion: document.getElementById('reportTriggerVersion').value,
+    reporterUrl: document.getElementById('reportUrl').value,
+    reporterFilters: document.getElementById('reportFilters').value,
+    streamPassthrough: document.getElementById('reportPassthrough').value,
+  };
+  await fetch('/api/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const saved = document.getElementById('reportSaved');
+  saved.style.display = '';
+  setTimeout(() => saved.style.display = 'none', 1500);
+  updateCounts();
+}
+
+// ── 字段映射（按上送目标接口 + 文档 schema 驱动）─────────
+const MAP_SOURCES = ['','um','const','uuid','config','req','res','reqText','resText','record']; // '' = 不映射
+const SOURCE_LABEL = { '':'— 不映射', um:'UM号(系统用户名)', const:'const 固定值', uuid:'uuid', config:'config 配置项', req:'req 请求体', res:'res 响应体', reqText:'reqText 请求原文', resText:'resText 响应原文', record:'record 元数据' };
+const MAP_TRANSFORMS = ['','joinMessages','isoDate','string','number','sseContent','sseModel','sseFinishReason','ssePromptTokens','sseCompletionTokens','sseTotalTokens'];
+const ARG_HINT = { '':'(不映射)', um:'(自动取右上角 UM 号)', const:'固定值', config:'配置键，如 reporterTriggerVersion', req:'请求体路径，如 model', res:'响应体路径，如 choices.0.message.content', record:'元数据，如 statusCode / requestHeaders.x-user-id', uuid:'(无需填)', reqText:'(整段请求文本)', resText:'(整段响应文本)' };
+const ARG_DISABLED_SRC = ['','um','uuid','reqText','resText'];
+const TARGET_HINTS = {
+  saveRecord: 'AI 响应完成后保存交互记录。必填字段已按报文预填，非必填可留空（不上送该字段）。',
+  updateRecordForAccept: '用户在 IDE 内采纳/复制/编辑代码后的反馈。这些是 IDE 端操作事件，<b>抓 AI 请求报文无法获取</b>，仅作字段参考。',
+};
+
+let mappingSchema = null;                 // {saveRecord:{label,path,fields}, updateRecordForAccept:{...}}
+let targets = { saveRecord:{match:'',mapping:{}}, updateRecordForAccept:{match:'',mapping:{}} };
+let currentTarget = 'saveRecord';
+
+async function loadMapping() {
+  if (!mappingSchema) mappingSchema = await fetch('/api/mapping/schema').then(x => x.json());
+  const s = await fetch('/api/settings').then(x => x.json());
+  targets = s.reporterTargets || { saveRecord:{match:'',mapping:{}}, updateRecordForAccept:{match:'',mapping:{}} };
+  renderTarget();
+}
+function switchTarget(name) {
+  syncTableToTarget();
+  currentTarget = name;
+  renderTarget();
+}
+function renderTarget() {
+  ['saveRecord','updateRecordForAccept'].forEach(n =>
+    document.getElementById('seg-'+n).classList.toggle('active', n===currentTarget));
+  document.getElementById('targetHint').innerHTML = TARGET_HINTS[currentTarget] || '';
+  document.getElementById('targetMatch').value = (targets[currentTarget]||{}).match || '';
+  renderTargetTable();
+}
+function visCols() {
+  return {
+    type: document.getElementById('col-type').checked,
+    required: document.getElementById('col-required').checked,
+    example: document.getElementById('col-example').checked,
+    desc: document.getElementById('col-desc').checked,
+    onlyMapped: document.getElementById('col-onlymapped').checked,
+  };
+}
+function renderTargetTable() {
+  const cols = visCols();
+  const head = ['<th>目标字段</th>'];
+  if (cols.type) head.push('<th>类型</th>');
+  if (cols.required) head.push('<th>必填</th>');
+  if (cols.example) head.push('<th>示例值</th>');
+  if (cols.desc) head.push('<th>描述</th>');
+  head.push('<th>来源</th><th>路径 / 键 / 值</th><th>transform</th>');
+  document.getElementById('mapHead').innerHTML = head.join('');
+
+  const fields = (mappingSchema[currentTarget] || {}).fields || [];
+  const mapping = (targets[currentTarget] || {}).mapping || {};
+  const rows = fields.filter(f => !cols.onlyMapped || mapping[f.name]).map(f => fieldRowHtml(f, mapping[f.name], cols));
+  document.getElementById('mappingBody').innerHTML = rows.join('') ||
+    `<tr><td colspan="8" style="color:#8b949e;padding:10px">无字段（勾选了「仅看已映射」但暂无映射）</td></tr>`;
+}
+function fieldRowHtml(f, spec, cols) {
+  const src = spec ? (spec.source || '') : '';
+  const argVal = src === 'const' ? (spec.value ?? '') : src === 'config' ? (spec.key ?? '') : (spec ? (spec.path ?? '') : '');
+  const argDisabled = ARG_DISABLED_SRC.includes(src) ? 'disabled' : '';
+  const srcOpts = MAP_SOURCES.map(s => `<option value="${s}" ${s===src?'selected':''}>${SOURCE_LABEL[s]||s}</option>`).join('');
+  const trOpts = MAP_TRANSFORMS.map(t => `<option value="${t}" ${t===((spec&&spec.transform)||'')?'selected':''}>${t||'—'}</option>`).join('');
+  const cells = [`<td><span class="fieldname" data-field="${esc(f.name)}" style="color:#79c0ff;font-weight:600">${esc(f.name)}</span></td>`];
+  if (cols.type) cells.push(`<td class="meta">${esc(f.type)}</td>`);
+  if (cols.required) cells.push(`<td class="${f.required?'req-yes':'req-no'}">${f.required?'必填':'选填'}</td>`);
+  if (cols.example) cells.push(`<td class="example">${esc(f.example)}</td>`);
+  if (cols.desc) cells.push(`<td class="meta">${esc(f.desc)}</td>`);
+  cells.push(`<td><select class="src" onchange="onSourceChange(this)">${srcOpts}</select></td>`);
+  cells.push(`<td><input class="arg" value="${esc(String(argVal))}" placeholder="${ARG_HINT[src]||''}" ${argDisabled}></td>`);
+  cells.push(`<td><select class="tr">${trOpts}</select></td>`);
+  return `<tr>${cells.join('')}</tr>`;
+}
+function onSourceChange(sel) {
+  const arg = sel.closest('tr').querySelector('.arg');
+  const src = sel.value;
+  arg.placeholder = ARG_HINT[src] || '';
+  arg.disabled = ARG_DISABLED_SRC.includes(src);
+  if (arg.disabled) arg.value = '';
+}
+function onTargetMatchEdit() {
+  if (targets[currentTarget]) targets[currentTarget].match = document.getElementById('targetMatch').value;
+}
+// 收集当前表格 → 映射对象（仅 source 非空的字段入映射）
+function collectMapping() {
+  const out = {};
+  document.querySelectorAll('#mappingBody tr').forEach(tr => {
+    const nameEl = tr.querySelector('.fieldname'); if (!nameEl) return;
+    const field = nameEl.dataset.field;
+    const source = tr.querySelector('.src') ? tr.querySelector('.src').value : '';
+    if (!source) return; // 不映射
+    const arg = tr.querySelector('.arg').value.trim();
+    const transform = tr.querySelector('.tr').value;
+    const spec = { source };
+    if (source === 'const') spec.value = arg;
+    else if (source === 'config') spec.key = arg;
+    else if (['req','res','record'].includes(source) && arg) spec.path = arg;
+    if (transform) spec.transform = transform;
+    out[field] = spec;
+  });
+  return out;
+}
+// 把表格写回内存（保留被「仅看已映射」过滤掉的字段）
+function syncTableToTarget() {
+  const t = targets[currentTarget]; if (!t) return;
+  const collected = collectMapping();
+  if (visCols().onlyMapped) {
+    // 过滤视图下只更新可见字段，保留其余
+    const visible = new Set([...document.querySelectorAll('#mappingBody .fieldname')].map(e => e.dataset.field));
+    const merged = { ...t.mapping };
+    visible.forEach(f => { if (collected[f]) merged[f] = collected[f]; else delete merged[f]; });
+    t.mapping = merged;
+  } else {
+    t.mapping = collected;
+  }
+  t.match = document.getElementById('targetMatch').value;
+}
+async function resetMappingToPreset() {
+  if (currentTarget !== 'saveRecord') { alert('预设仅适用于 saveRecord'); return; }
+  const preset = await fetch('/api/mapping/preset').then(x => x.json()).catch(() => null);
+  if (!preset) return;
+  targets.saveRecord.mapping = preset;
+  renderTargetTable();
+}
+async function saveMapping() {
+  syncTableToTarget();
+  await fetch('/api/settings', { method:'PUT', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ reporterTargets: targets }) });
+  const el = document.getElementById('mappingSaved');
+  el.style.display = ''; setTimeout(() => el.style.display = 'none', 1500);
+}
+async function previewMapping() {
+  const mapping = collectMapping();
+  const match = document.getElementById('targetMatch').value.trim();
+  const r = await fetch('/api/mapping/preview', { method:'POST', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ mapping, match }) }).then(x => x.json());
+  const meta = document.getElementById('mappingPreviewMeta');
+  if (!r.preview) { meta.textContent = ''; document.getElementById('mappingPreview').textContent = r.note || '无数据'; return; }
+  meta.textContent = `· #${r.record.id} ${r.record.method} ${shortUrl(r.record.url)} → ${r.record.statusCode}`;
+  document.getElementById('mappingPreview').textContent = JSON.stringify(r.preview, null, 2);
+}
+
+// ── 上送队列 ───────────────────────────────────────────
+const QSTATUS = { pending:['qb-pending','待送'], sending:['qb-sending','发送中'], failed:['qb-failed','失败'] };
+
+function renderQueue(snap) {
+  if (!snap || !snap.stats) return;
+  const st = snap.stats;
+  document.getElementById('qPending').textContent = st.pending;
+  document.getElementById('qSending').textContent = st.sending;
+  document.getElementById('qFailed').textContent = st.failed;
+  document.getElementById('qSent').textContent = st.sentTotal;
+
+  // tab 角标：待送+失败的积压数
+  const backlog = st.pending + st.failed + st.sending;
+  const badge = document.getElementById('queueBadge');
+  badge.textContent = backlog;
+  badge.style.display = backlog ? '' : 'none';
+
+  const qb = document.getElementById('queueBody');
+  qb.innerHTML = (snap.queue || []).map(e => {
+    const [cls, label] = QSTATUS[e.status] || ['', e.status];
+    return `<tr style="cursor:pointer" onclick="showQueueDetail(${e.qid})" title="点击预览上送报文">
+      <td style="color:#8b949e">${e.qid}</td>
+      <td><span class="qbadge ${cls}" title="${esc(e.lastError||'')}">${label}</span></td>
+      <td title="${esc(e.url)}">${esc(shortUrl(e.url))}</td>
+      <td style="color:#8b949e">${e.attempts}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('queueEmpty').style.display = (snap.queue||[]).length ? 'none' : '';
+
+  const hb = document.getElementById('historyBody');
+  hb.innerHTML = (snap.history || []).map(h => `<tr>
+      <td style="color:#8b949e">${h.qid}</td>
+      <td title="${esc(h.url)}">${esc(shortUrl(h.url))}</td>
+      <td style="color:#8b949e">${h.sentAt ? new Date(h.sentAt).toLocaleTimeString() : '-'}</td>
+    </tr>`).join('');
+  document.getElementById('historyEmpty').style.display = (snap.history||[]).length ? 'none' : '';
+}
+
+async function loadQueue() {
+  const snap = await fetch('/api/queue').then(x => x.json());
+  renderQueue(snap);
+}
+
+async function showQueueDetail(qid) {
+  const r = await fetch(`/api/queue/${qid}`);
+  if (!r.ok) { alert('该条目已不在队列中（可能已送达）'); return; }
+  const d = await r.json();
+  const [cls, label] = QSTATUS[d.status] || ['', d.status];
+  document.getElementById('qmTitle').textContent = `上送报文预览 · #${d.qid}`;
+  document.getElementById('qmBody').innerHTML = `
+    <div class="section">
+      <h3>队列信息</h3>
+      <table class="kv-table">
+        <tr><td>状态</td><td><span class="qbadge ${cls}">${label}</span></td></tr>
+        <tr><td>上送格式</td><td>${esc(d.format)}</td></tr>
+        <tr><td>目标地址</td><td>${esc(d.target || '(未配置)')}</td></tr>
+        <tr><td>重试次数</td><td>${d.attempts}</td></tr>
+        <tr><td>入队时间</td><td>${new Date(d.enqueuedAt).toLocaleString()}</td></tr>
+        ${d.lastError ? `<tr><td>最后错误</td><td style="color:#f85149">${esc(d.lastError)}</td></tr>` : ''}
+      </table>
+    </div>
+    <div class="section">
+      <h3>上送请求行</h3>
+      <pre class="body-pre">${esc((d.uploadMethod || 'POST') + ' ' + (d.target || '(未配置)'))}</pre>
+    </div>
+    <div class="section">
+      <h3>上送请求头</h3>
+      ${headersHtml(d.uploadHeaders)}
+    </div>
+    <div class="section">
+      <h3>实际上送报文体（按当前映射/格式计算）</h3>
+      <pre class="body-pre">${esc(JSON.stringify(d.preview, null, 2))}</pre>
+    </div>
+    <div class="section">
+      <h3>原始抓包报文</h3>
+      <table class="kv-table">
+        <tr><td>URL</td><td>${esc(d.record.url)}</td></tr>
+        <tr><td>方法</td><td>${esc(d.record.method)}</td></tr>
+        <tr><td>状态码</td><td class="${statusClass(d.record.statusCode)}">${d.record.statusCode ?? '-'}</td></tr>
+      </table>
+      <h3 style="margin-top:10px">请求头</h3>
+      ${headersHtml(d.record.requestHeaders)}
+      ${d.record.requestBody ? `<h3 style="margin-top:10px">请求 Body</h3><pre class="body-pre">${esc(tryFormat(d.record.requestBody))}</pre>` : ''}
+      <h3 style="margin-top:10px">响应头</h3>
+      ${headersHtml(d.record.responseHeaders)}
+      ${d.record.responseBody ? `<h3 style="margin-top:10px">响应 Body</h3><pre class="body-pre">${esc(tryFormat(d.record.responseBody))}</pre>` : ''}
+    </div>`;
+  document.getElementById('queueModal').classList.add('open');
+}
+function closeQueueModal() { document.getElementById('queueModal').classList.remove('open'); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeQueueModal(); closeBackfillModal(); closeSseModal(); } });
+async function retryQueue() { await fetch('/api/queue/retry', { method: 'POST' }); }
+async function backfillQueue() {
+  const d = await fetch('/api/queue/backfill/candidates').then(x => x.json());
+  const meta = document.getElementById('bfMeta');
+  const body = document.getElementById('bfBody');
+  document.getElementById('bfAll').checked = false;
+  if (!d.count) {
+    meta.textContent = '';
+    body.innerHTML = `<div style="color:#8b949e;padding:18px">没有可补送的报文。<br>可能原因：无匹配过滤规则的报文、或都已送过。</div>`;
+  } else {
+    meta.innerHTML = `共 <b>${d.count}</b> 条可补送${d.enabled ? '' : '　<span style="color:#f0883e">⚠ 上送未开启/未配置，补送会入队但不会发出，请先在「上送设置」开启</span>'}`;
+    body.innerHTML = `<table class="map-table" style="width:100%"><thead><tr>
+        <th style="width:34px"></th><th style="width:50px">方法</th><th>URL</th><th style="width:48px">状态</th><th style="width:90px">时间</th><th style="width:60px"></th>
+      </tr></thead><tbody>${d.items.map(it => `<tr>
+        <td><input type="checkbox" class="bf-chk" value="${it.id}" onchange="bfSync()"></td>
+        <td>${esc(it.method)}</td>
+        <td title="${esc(it.url)}" style="word-break:break-all">${esc(shortUrl(it.url))}</td>
+        <td class="${statusClass(it.statusCode)}">${it.statusCode}</td>
+        <td style="color:#8b949e;font-size:11px">${new Date(it.timestamp).toLocaleTimeString()}</td>
+        <td><button class="copy-btn" onclick="bfSubmit([${it.id}])">补送</button></td>
+      </tr>`).join('')}</tbody></table>`;
+  }
+  document.getElementById('backfillModal').classList.add('open');
+}
+function closeBackfillModal() { document.getElementById('backfillModal').classList.remove('open'); }
+function bfToggleAll(on) { document.querySelectorAll('.bf-chk').forEach(c => c.checked = on); }
+function bfSync() {
+  const all = [...document.querySelectorAll('.bf-chk')];
+  document.getElementById('bfAll').checked = all.length && all.every(c => c.checked);
+}
+async function bfSubmit(ids) {
+  // ids 省略 = 批量补送勾选项；传 [id] = 单条
+  const selected = ids || [...document.querySelectorAll('.bf-chk:checked')].map(c => +c.value);
+  if (!selected.length) { alert('请先勾选要补送的报文'); return; }
+  const r = await fetch('/api/queue/backfill', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: selected }) }).then(x => x.json());
+  alert(`已补送 ${r.enqueued} 条入队。`);
+  backfillQueue(); // 刷新候选列表（已补送的会从候选中消失）
+}
+async function clearQueue() {
+  if (!confirm('确定清空队列？未送达的任务将被丢弃。')) return;
+  await fetch('/api/queue', { method: 'DELETE' });
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', ['detail','rules','report','mapping','queue'][i] === name));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.getElementById(`tab-${name}`).classList.add('active');
+  if (name === 'rules') loadRules();
+  if (name === 'report') loadReportSettings();
+  if (name === 'mapping') loadMapping();
+  if (name === 'queue') loadQueue();
+}
+
+// ── UM 号（createdBy）─────────────────────────────────
+let umAccount = '';
+async function loadUm() {
+  const s = await fetch('/api/settings').then(x => x.json());
+  umAccount = s.umAccount || '';
+  document.getElementById('umValue').textContent = umAccount || '(未设置)';
+}
+async function editUm() {
+  const v = prompt('UM 号（系统用户名，作为上送 createdBy）：', umAccount);
+  if (v === null) return;
+  const next = v.trim();
+  await fetch('/api/settings', { method:'PUT', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ umAccount: next }) });
+  umAccount = next;
+  document.getElementById('umValue').textContent = umAccount || '(未设置)';
+}
+
+// ── Init ───────────────────────────────────────────────
+connectWS();
+updateCounts();
+loadQueue();
+loadUm();
+loadHeaderReporter();
+</script>
+</body>
+</html>
