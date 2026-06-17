@@ -26,7 +26,7 @@ module.exports = {
   // 单条最多自动重试次数；达上限后转为终态 failed，不再自动重试，需手动「重试失败项」
   REPORTER_MAX_ATTEMPTS: 5,
   // 内存中最多保留的流量条数
-  MAX_TRAFFIC_RECORDS: 500,
+  MAX_TRAFFIC_RECORDS: process.env.MAX_TRAFFIC_RECORDS || 2000,
   // 上送队列持久化文件（应用重启后从此恢复未完成任务，防止漏送）
   REPORTER_QUEUE_FILE: process.env.REPORTER_QUEUE_FILE || require('path').join(__dirname, '..', 'reporter-queue.json'),
   // UI 展示的"已完成"历史最大条数

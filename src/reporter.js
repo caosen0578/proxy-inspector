@@ -7,6 +7,12 @@ const { REPORTER_BATCH_SIZE, REPORTER_FLUSH_MS, REPORTER_MAX_ATTEMPTS,
 const settings = require('./settings');
 const { toSaveRecord } = require('./reporter-mapping');
 
+// 已送达历史里每条 body 的最大留存长度（仅供 UI 预览；全量从 trafficStore 取）
+const HISTORY_BODY_MAX = 65536; // 64KB
+
+// 队列落盘 debounce 窗口：合并突发写入，降低同步 I/O 对事件循环的阻塞
+const PERSIST_DEBOUNCE_MS = 250;
+
 // 上送目标是否就绪：raw 看 reporterUrl，behavior 看 reporterBaseUrl
 function targetReady(cfg) {
   if (!cfg.reporterEnabled) return false;
@@ -54,7 +60,19 @@ class Reporter extends EventEmitter {
     }
   }
 
+  // debounce 落盘：合并突发期间（如一批 SSE 同时完成）的多次写入为一次，
+  // 避免每步状态变更都同步阻塞事件循环。最坏丢失窗口 = PERSIST_DEBOUNCE_MS。
   _persist() {
+    if (this._persistTimer) return;
+    this._persistTimer = setTimeout(() => {
+      this._persistTimer = null;
+      this._persistNow();
+    }, PERSIST_DEBOUNCE_MS);
+  }
+
+  // 立即同步落盘（进程退出时调用，确保不丢未写入的变更）
+  _persistNow() {
+    if (this._persistTimer) { clearTimeout(this._persistTimer); this._persistTimer = null; }
     try {
       fs.writeFileSync(REPORTER_QUEUE_FILE, JSON.stringify({ qid: this.qid, queue: this.queue }));
     } catch (e) {
@@ -70,6 +88,11 @@ class Reporter extends EventEmitter {
     if (!urlMatches(record.url, cfg.reporterFilters)) return false;
     if (record.statusCode == null) return false;          // 未完成的不送（响应还没回来）
     if (record.id != null && this.enqueuedIds.has(record.id)) return false; // 去重，避免补送重复
+
+    // 提前计算上送报文：result 为空说明模型本轮没有产生代码，跳过
+    const mapping = settings.mappingForUrl(record.url);
+    const preview = toSaveRecord(record, { mapping, config: cfg });
+    if (!preview.result) return false;
 
     if (record.id != null) this.enqueuedIds.add(record.id);
     const entry = {
@@ -87,10 +110,10 @@ class Reporter extends EventEmitter {
         method: record.method,
         url: record.url,
         requestHeaders: record.requestHeaders,
-        requestBody: truncate(record.requestBody, 65536),
+        requestBody: truncate(record.requestBody, 524288),   // 512KB：messages 历史可能很大
         statusCode: record.statusCode,
         responseHeaders: record.responseHeaders,
-        responseBody: truncate(record.responseBody, 65536),
+        responseBody: truncate(record.responseBody, 5242880), // 5MB：reasoning 模型 SSE 流可达数 MB
         duration: record.duration,
       },
     };
@@ -184,20 +207,43 @@ class Reporter extends EventEmitter {
     }
     // 单次发送；重试由 _flush 按周期驱动，最多 REPORTER_MAX_ATTEMPTS 次
     try {
-      await axios.post(url, body, { timeout: 5000, ...extra });
+      const resp = await axios.post(url, body, { timeout: 5000, ...extra });
+      entry.response = buildResponseSnapshot(resp.status, resp.statusText, resp.data);
+      // 埋点接口即便 HTTP 200 也可能业务失败：靠响应体 code/success 判定真正成败
+      // 成功：code === '0'（或 success === true）；失败：code 非 0（如 code:'1', msg:'requestId不能为空'）
+      const biz = bizResult(cfg, resp.data);
+      if (!biz.ok) {
+        entry.attempts++;
+        entry.lastError = `${biz.msg || '上送被接口拒绝'}（第 ${entry.attempts}/${REPORTER_MAX_ATTEMPTS} 次）`;
+        entry.response.ok = false; // 详情里也显示为失败
+        return false;
+      }
       return true;
     } catch (err) {
       entry.attempts++;
       entry.lastError = `${err.message}（第 ${entry.attempts}/${REPORTER_MAX_ATTEMPTS} 次）`;
+      // 记录上送接口的错误响应（有响应=接口拒绝，无响应=网络/超时）
+      entry.response = err.response
+        ? buildResponseSnapshot(err.response.status, err.response.statusText, err.response.data)
+        : { ok: false, status: null, statusText: null, body: err.message };
       return false;
     }
   }
 
   _addHistory(entry) {
-    this.history.unshift({
-      qid: entry.qid, url: entry.url, method: entry.method,
-      attempts: entry.attempts, sentAt: entry.sentAt,
-    });
+    // 已送达条目需可预览上送报文，但完整 record 的响应体可达数 MB，
+    // 100 条全量留存最坏占用数百 MB。这里只保留裁剪后的 body（前端预览时
+    // 会优先从 /api/traffic/:id 拉未截断全量，trafficStore 在则不受影响）。
+    const rec = entry.record || {};
+    const slim = {
+      ...entry,
+      record: {
+        ...rec,
+        requestBody: truncate(rec.requestBody, HISTORY_BODY_MAX),
+        responseBody: truncate(rec.responseBody, HISTORY_BODY_MAX),
+      },
+    };
+    this.history.unshift(slim);
     if (this.history.length > REPORTER_HISTORY_MAX) this.history.length = REPORTER_HISTORY_MAX;
   }
 
@@ -220,7 +266,8 @@ class Reporter extends EventEmitter {
 
   // 取单条队列详情：原始报文 + 实际将上送的报文体预览
   getEntry(qid) {
-    const entry = this.queue.find(e => e.qid === Number(qid));
+    const entry = this.queue.find(e => e.qid === Number(qid))
+               || this.history.find(e => e.qid === Number(qid)); // 已送达的从历史里找
     if (!entry) return null;
     const cfg = settings.get();
     let preview, target, uploadHeaders;
@@ -242,6 +289,7 @@ class Reporter extends EventEmitter {
       uploadHeaders,            // 上送时实际发送的请求头
       record: entry.record,   // 抓到的原始报文
       preview,                // 按当前映射/格式计算的上送报文体
+      response: entry.response || null, // 上送接口的返回（状态码 + 响应体），未发送过则为 null
     };
   }
 
@@ -258,15 +306,49 @@ class Reporter extends EventEmitter {
       queue: this.queue.map(e => ({
         qid: e.qid, status: e.status, url: e.url, method: e.method,
         attempts: e.attempts, lastError: e.lastError, enqueuedAt: e.enqueuedAt,
+        recordId: e.record && e.record.id != null ? e.record.id : null, // 原始抓包 ID
       })),
-      history: this.history.slice(0, 30),
+      // history 内部存完整 entry，快照只投影精简字段，避免 WS 每次推送大报文
+      history: this.history.slice(0, 30).map(e => ({
+        qid: e.qid, url: e.url, method: e.method,
+        attempts: e.attempts, sentAt: e.sentAt,
+        recordId: e.record && e.record.id != null ? e.record.id : null,
+      })),
     };
   }
 
   destroy() {
     if (this.timer) clearInterval(this.timer);
-    this._persist();
+    this._persistNow(); // 退出时强制同步写盘，不走 debounce
   }
+}
+
+// 构造上送接口响应快照（状态码 + 文本化的响应体），供 UI 展示。
+// 响应体超过 64KB 截断，避免个别接口回大报文撑爆内存。
+function buildResponseSnapshot(status, statusText, data) {
+  let body;
+  if (data == null) body = '';
+  else if (typeof data === 'string') body = data;
+  else { try { body = JSON.stringify(data); } catch { body = String(data); } }
+  if (body.length > 65536) body = body.slice(0, 65536) + '...[truncated]';
+  return {
+    ok: typeof status === 'number' && status >= 200 && status < 300,
+    status: status ?? null,
+    statusText: statusText || '',
+    body,
+    at: Date.now(),
+  };
+}
+
+// 判定埋点接口的业务成败：HTTP 200 不代表成功，要看响应体 code/success。
+//   behavior 模式：code === '0'（或 success === true）为成功；其余视为失败，取 msg 作错误提示。
+//   raw 模式：无统一响应契约，沿用 HTTP 状态（能走到这里就是 2xx）= 成功。
+function bizResult(cfg, data) {
+  if (cfg.reporterFormat !== 'behavior') return { ok: true };
+  if (data == null || typeof data !== 'object') return { ok: true }; // 非 JSON 响应，不强判，按 HTTP 成功处理
+  const code = data.code;
+  const ok = (code === '0' || code === 0) || (code == null && data.success === true);
+  return { ok, msg: data.msg || data.message || '' };
 }
 
 // 过滤列表为空 → 全部匹配；否则命中任意一条即匹配

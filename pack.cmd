@@ -27,6 +27,7 @@ robocopy web             "%OUT%\web"             /e /njh /njs /ndl /nc /ns >nul
 robocopy node_modules    "%OUT%\node_modules"    /e /njh /njs /ndl /nc /ns >nul
 robocopy mapping-presets "%OUT%\mapping-presets" /e /njh /njs /ndl /nc /ns >nul
 robocopy patches         "%OUT%\patches"         /e /njh /njs /ndl /nc /ns >nul
+robocopy scripts         "%OUT%\scripts"         /e /njh /njs /ndl /nc /ns >nul
 copy /y package.json      "%OUT%\" >nul
 copy /y package-lock.json "%OUT%\" >nul
 copy /y start.cmd         "%OUT%\" >nul

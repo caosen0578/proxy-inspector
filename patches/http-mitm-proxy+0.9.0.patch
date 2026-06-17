@@ -12,3 +12,46 @@ index beb573e..6ca75e6 100644
    var attrsServer = ServerAttrs.slice(0);
    attrsServer.unshift({
      name: 'commonName',
+diff --git a/node_modules/http-mitm-proxy/lib/proxy.js b/node_modules/http-mitm-proxy/lib/proxy.js
+index f231062..ed70f8b 100644
+--- a/node_modules/http-mitm-proxy/lib/proxy.js
++++ b/node_modules/http-mitm-proxy/lib/proxy.js
+@@ -968,6 +968,26 @@ Proxy.prototype._onWebSocketFrame = function(ctx, type, fromServer, data, flags)
+   });
+ };
+ 
++// 安全关闭 WebSocket：1005/1006/1015 等保留码不允许应用层显式发送，
++// 直接传给 ws.close() 会抛 "first argument must be a valid error code number" 并崩溃进程。
++// 合法范围：1000、3000-4999、以及部分 1001-1014（排除保留码）。不合法则无参关闭。
++function closeWebSocketSafely(socket, code, message) {
++  try {
++    var valid = typeof code === 'number' &&
++      ((code === 1000) ||
++       (code >= 3000 && code <= 4999) ||
++       (code >= 1001 && code <= 1014 && code !== 1004 && code !== 1005 && code !== 1006));
++    if (valid) {
++      socket.close(code, message);
++    } else {
++      socket.close();
++    }
++  } catch (e) {
++    // 兜底：即便如此仍异常（如底层 socket 已损坏），也不让它冒泡崩溃进程
++    try { socket.terminate(); } catch (e2) {}
++  }
++}
++
+ Proxy.prototype._onWebSocketClose = function(ctx, closedByServer, code, message) {
+   if (!ctx.closedByServer && !ctx.closedByClient) {
+     ctx.closedByServer = closedByServer;
+@@ -980,9 +1000,9 @@ Proxy.prototype._onWebSocketClose = function(ctx, closedByServer, code, message)
+       }
+       if (ctx.clientToProxyWebSocket.readyState !== ctx.proxyToServerWebSocket.readyState) {
+         if (ctx.clientToProxyWebSocket.readyState === WebSocket.CLOSED && ctx.proxyToServerWebSocket.readyState === WebSocket.OPEN) {
+-          ctx.proxyToServerWebSocket.close(code, message);
++          closeWebSocketSafely(ctx.proxyToServerWebSocket, code, message);
+         } else if (ctx.proxyToServerWebSocket.readyState === WebSocket.CLOSED && ctx.clientToProxyWebSocket.readyState === WebSocket.OPEN) {
+-          ctx.clientToProxyWebSocket.close(code, message);
++          closeWebSocketSafely(ctx.clientToProxyWebSocket, code, message);
+         }
+       }
+     });

@@ -13,6 +13,8 @@ function detectUm() {
 const SETTINGS_FILE = path.join(__dirname, '..', 'settings.json');
 
 const defaults = {
+  // 界面显示的软件名称（浏览器标题 + 页头），可在「上送设置」里修改
+  appTitle: '资金同业代码解析工具',
   // 上送总开关
   reporterEnabled: !!config.REPORTER_URL,
   // 上送目标地址（raw 模式）

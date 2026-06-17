@@ -25,3 +25,8 @@ docjpg/*.png
 
 # 误建的嵌套目录
 /proxy-inspector/
+/docjpg/*.md
+/docjpg/codebuddy代码提取建议.md
+/docjpg/field-mapping-review.md
+/docjpg/报文字段分析.md
+/docjpg/用户行为埋点接口文档-v1.0.md
