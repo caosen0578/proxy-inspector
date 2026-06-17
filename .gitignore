@@ -1,6 +1,7 @@
 # 依赖与运行时
 node_modules/
 certs/
+secrets/
 settings.json
 reporter-queue.json
 rules.json

@@ -5,9 +5,36 @@ const ruleEngine = require('./rule-engine');
 const settings = require('./settings');
 const reporter = require('./reporter');
 const config = require('./config');
+const admin = require('./admin');
+
+// 管理员会话从请求头 x-admin-session 读取（前端解锁后带上）
+function sidOf(req) { return req.get('x-admin-session') || ''; }
+// 保护中间件：非管理员一律 403，前端据此挡住「上送设置」「字段映射」的写操作
+function requireAdmin(req, res, next) {
+  if (!admin.isAdmin(sidOf(req))) return res.status(403).json({ error: 'admin_required' });
+  next();
+}
 
 function buildRouter() {
   const r = express.Router();
+
+  // ── 管理员解锁 / 锁定 / 状态 ──
+  // 解锁：粘贴分发者签发的令牌，验签通过则开内存会话（重启失效、到 exp 失效）
+  r.post('/admin/unlock', (req, res) => {
+    const result = admin.unlock((req.body && req.body.token) || '');
+    if (!result.ok) return res.status(401).json({ error: result.reason });
+    res.json({ ok: true, sid: result.sid, exp: result.exp });
+  });
+  r.post('/admin/lock', (req, res) => { admin.lock(sidOf(req)); res.json({ ok: true }); });
+  r.get('/admin/state', (req, res) => res.json(admin.state(sidOf(req))));
+  // 令牌签发（仅本机存在私钥时可用，即分发者机器）。私钥在=授权，故不另需管理员会话。
+  r.get('/admin/issuer', (req, res) => res.json({ available: admin.canIssue(), user: admin.currentUser() }));
+  r.post('/admin/issue', (req, res) => {
+    const { user, hours } = req.body || {};
+    const result = admin.issue(user, hours);
+    if (!result.ok) return res.status(result.reason === 'no_key' ? 403 : 400).json({ error: result.reason });
+    res.json(result);
+  });
 
   r.get('/traffic', (req, res) => {
     const { url, method, status, page, size } = req.query;
@@ -65,8 +92,14 @@ function buildRouter() {
   r.get('/ca.cer', (req, res) => sendCa(res, 'cer'));
 
   // 上送设置（开关 / 地址 / URL 过滤列表）
-  r.get('/settings', (req, res) => res.json(settings.get()));
-  r.put('/settings', (req, res) => res.json(settings.update(req.body || {})));
+  // 读取：非管理员不下发 apiToken 明文（管理员相关 tab 前端也会隐藏，这里是后端兜底）
+  r.get('/settings', (req, res) => {
+    const s = settings.get();
+    if (!admin.isAdmin(sidOf(req)) && s.reporterToken) s.reporterToken = ''; // 掩掉，避免直接调 API 拿明文
+    res.json(s);
+  });
+  // 写入：仅管理员（含上送地址/Token/字段映射等敏感配置）
+  r.put('/settings', requireAdmin, (req, res) => res.json(settings.update(req.body || {})));
 
   // 上送队列：状态快照 / 手动重试失败项 / 清空队列
   // 字段映射预览：用给定映射 + 一条流量（默认最近一条，可指定 recordId）算出上送报文体
@@ -120,6 +153,11 @@ function buildRouter() {
     res.json(entry);
   });
   r.post('/queue/retry', (req, res) => res.json(reporter.retryFailed()));
+  r.post('/queue/:qid/retry', (req, res) => {
+    const result = reporter.retryOne(req.params.qid);
+    if (!result.ok) return res.status(result.reason === 'not_found' ? 404 : 409).json({ error: result.reason });
+    res.json(result.snapshot);
+  });
   r.delete('/queue', (req, res) => res.json(reporter.clearQueue()));
 
   r.get('/status', (req, res) => {

@@ -257,6 +257,21 @@ class Reporter extends EventEmitter {
     return this.snapshot();
   }
 
+  // 单条重试：把指定 qid 复位为待送并重置计数，立即触发发送。
+  // 适用于任意非发送中状态（failed / pending），sending 中的不打断。
+  retryOne(qid) {
+    const entry = this.queue.find(e => e.qid === Number(qid));
+    if (!entry) return { ok: false, reason: 'not_found' };
+    if (entry.status === 'sending') return { ok: false, reason: 'sending' };
+    entry.status = 'pending';
+    entry.attempts = 0;
+    entry.lastError = null;
+    this._persist();
+    this.emit('change', this.snapshot());
+    this._flush();
+    return { ok: true, snapshot: this.snapshot() };
+  }
+
   clearQueue() {
     this.queue = [];
     this._persist();
@@ -274,7 +289,8 @@ class Reporter extends EventEmitter {
     if (cfg.reporterFormat === 'behavior') {
       target = (cfg.reporterBaseUrl || '') + config.BEHAVIOR_SAVE_PATH;
       preview = toSaveRecord(entry.record, { mapping: settings.mappingForUrl(entry.record.url), config: cfg });
-      uploadHeaders = { 'content-type': 'application/json', [config.BEHAVIOR_TOKEN_HEADER]: cfg.reporterToken || '' };
+      // apiToken 仅管理员可见：报文展示一律掩码，明文不下发到前端（实际上送仍用真实值）
+      uploadHeaders = { 'content-type': 'application/json', [config.BEHAVIOR_TOKEN_HEADER]: maskToken(cfg.reporterToken) };
     } else {
       target = cfg.reporterUrl || '';
       preview = { records: [entry.record] };
@@ -349,6 +365,12 @@ function bizResult(cfg, data) {
   const code = data.code;
   const ok = (code === '0' || code === 0) || (code == null && data.success === true);
   return { ok, msg: data.msg || data.message || '' };
+}
+
+// apiToken 掩码：报文展示用，不暴露明文。空→空；否则一律固定掩码（不泄露长度/首尾）。
+function maskToken(token) {
+  if (!token) return '';
+  return '••••••••（仅管理员可见）';
 }
 
 // 过滤列表为空 → 全部匹配；否则命中任意一条即匹配
