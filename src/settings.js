@@ -4,10 +4,13 @@ const os = require('os');
 const config = require('./config');
 const { DEFAULT_MAPPING } = require('./reporter-mapping');
 
-// 自动获取系统用户名作为 UM 号默认值（createdBy）
+// 自动获取系统用户名作为 UM 号默认值（createdBy）。
+// 统一转小写：显示与上送 createdBy 都用小写，避免大小写不一致。
 function detectUm() {
-  try { return os.userInfo().username || ''; }
-  catch { return process.env.USERNAME || process.env.USER || ''; }
+  let name = '';
+  try { name = os.userInfo().username || ''; }
+  catch { name = process.env.USERNAME || process.env.USER || ''; }
+  return String(name).trim().toLowerCase();
 }
 
 const SETTINGS_FILE = path.join(__dirname, '..', 'settings.json');
@@ -15,6 +18,8 @@ const SETTINGS_FILE = path.join(__dirname, '..', 'settings.json');
 const defaults = {
   // 界面显示的软件名称（浏览器标题 + 页头），可在「上送设置」里修改
   appTitle: '资金同业代码解析工具',
+  // 界面显示的版本号（页头中间），可在「上送设置」里修改
+  appVersion: '版本号：fat001- v1.0.0',
   // 上送总开关
   reporterEnabled: !!config.REPORTER_URL,
   // 上送目标地址（raw 模式）
@@ -39,8 +44,8 @@ const defaults = {
     // 能从抓包映射的：requestId（与 saveRecord 关联）+ acceptResult（尽力填 AI 结果快照）；
     // actionType / acceptCodeLines / acceptCodeSize 为 IDE 端用户操作，抓包无法获取，留空。
     updateRecordForAccept: { match: '', mapping: {
-      requestId:    { source: 'record',  path: 'requestHeaders.x-request-trace-id' },
-      acceptResult: { source: 'resText', transform: 'sseContent' },
+      requestId:    { source: 'record',  path: 'requestHeaders.x-conversation-message-id' },
+      acceptResult: { source: 'resText', transform: 'sseCodeAll' },
     } },
   },
   // URL 过滤白名单（数组）。为空 = 不过滤，上送全部。
@@ -73,6 +78,8 @@ function load() {
       state.reporterTargets = normalizeTargets(state.reporterTargets);
       // 非手动设置则始终按当前机器重新探测（防止拷贝来的 settings.json 带着别人的用户名）
       if (!state.umAccountManual || !state.umAccount) state.umAccount = detectUm();
+      // 统一小写：兼容历史 settings.json 里存的大写用户名
+      state.umAccount = String(state.umAccount || '').toLowerCase();
     } catch {
       state = { ...defaults };
     }
@@ -101,7 +108,7 @@ function update(patch) {
   if (next.reporterBaseUrl !== undefined) next.reporterBaseUrl = String(next.reporterBaseUrl).trim().replace(/\/+$/, '');
   if (next.reporterToken !== undefined) next.reporterToken = String(next.reporterToken).trim();
   if (next.reporterTriggerVersion !== undefined) next.reporterTriggerVersion = String(next.reporterTriggerVersion).trim();
-  if (next.umAccount !== undefined) { next.umAccount = String(next.umAccount).trim(); next.umAccountManual = true; }
+  if (next.umAccount !== undefined) { next.umAccount = String(next.umAccount).trim().toLowerCase(); next.umAccountManual = true; }
   if (next.streamPassthrough !== undefined) next.streamPassthrough = normalizeFilters(next.streamPassthrough);
   if (next.reporterTargets !== undefined) next.reporterTargets = normalizeTargets(next.reporterTargets);
   state = { ...state, ...next };

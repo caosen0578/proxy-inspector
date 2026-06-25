@@ -205,6 +205,8 @@ tbody td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflo
   <div class="badge">上送 <span id="reporterState">关</span></div>
   <div class="ws-dot" id="wsDot" title="WebSocket 状态"></div>
   <div class="spacer"></div>
+  <div id="appVersionBox" class="badge" title="版本号，可在「上送设置」里修改"><span id="appVersionH">v1.0.0</span></div>
+  <div class="spacer"></div>
   <div id="umBox" title="UM 号 = 系统用户名，作为上送 createdBy（统计个人代码生成率）。点击可修改" style="display:flex;align-items:center;gap:6px;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer" onclick="editUm()">
     <span style="color:#8b949e">UM</span>
     <span id="umValue" style="color:#79c0ff;font-weight:600">…</span>
@@ -374,6 +376,10 @@ tbody td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflo
         <label>软件名称（界面标题）</label>
         <input id="appTitleInput" placeholder="资金同业代码解析工具">
         <p style="color:#8b949e;font-size:11px;margin:2px 0 10px">显示在浏览器标签和页头，保存后立即生效。</p>
+
+        <label>版本号</label>
+        <input id="appVersionInput" placeholder="v1.0.0">
+        <p style="color:#8b949e;font-size:11px;margin:2px 0 10px">显示在页头中间，保存后立即生效。</p>
 
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
           <div class="toggle" id="reportToggle" onclick="toggleReporter()"></div>
@@ -707,22 +713,24 @@ function flashRow(el) { if (!el) return; el.classList.remove('flash'); void el.o
 // 队列 → 定位左侧抓包列表
 function locateTraffic(recordId) {
   if (!state.records.some(r => r.id === recordId)) { alert('该报文已不在抓包列表（可能超出保留上限或被清空）'); return; }
-  // 清掉筛选，确保能渲染出来
-  state.filter = { url:'', method:'', status:'', type:'' };
-  ['filterUrl','filterMethod','filterStatus'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+  // 仅当该报文在当前筛选下不可见时，才临时清掉筛选；否则保留用户的筛选条件
+  if (!filtered().some(r => r.id === recordId)) {
+    state.filter = { url:'', method:'', status:'', type:'' };
+    ['filterUrl','filterMethod','filterStatus'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+    showToast('已临时清除筛选以定位该报文');
+  }
   state.selectedId = recordId;
   renderTraffic();
   showDetail(recordId);
   requestAnimationFrame(() => flashRow(document.getElementById('trow-' + recordId)));
 }
-// 抓包 → 切到上送队列并定位
+// 抓包 → 切到上送队列并定位（已送达的在「最近送达」表 hrow-，其余在队列表 qrow-）
 function locateQueue(recordId) {
   const ref = queueIndex[recordId];
   if (ref == null) { alert('该报文不在上送队列中'); return; }
-  // 已送达的在「最近送达」表（无 qrow-），仍切到队列页高亮对应行（队列行 id 为 qrow-）；
-  // 找不到 qrow- 时退化为切页即可，用户能在最近送达里看到。
   switchTab('queue');
-  setTimeout(() => flashRow(document.getElementById('qrow-' + ref.qid)), 350);
+  const rowId = (ref.status === 'sent' ? 'hrow-' : 'qrow-') + ref.qid;
+  setTimeout(() => flashRow(document.getElementById(rowId)), 350);
 }
 
 function filtered() {
@@ -1373,12 +1381,19 @@ function applyAppTitle(title) {
   const h1 = document.getElementById('appTitleH1');
   if (h1) h1.textContent = '⚡ ' + name;
 }
+function applyAppVersion(version) {
+  const v = (version || '').trim() || 'v1.0.0';
+  const el = document.getElementById('appVersionH');
+  if (el) el.textContent = v;
+}
 async function loadReportSettings() {
   const s = await fetch('/api/settings').then(x => x.json());
   reportEnabled = !!s.reporterEnabled;
   renderReportToggle();
   document.getElementById('appTitleInput').value = s.appTitle || '';
   applyAppTitle(s.appTitle);
+  document.getElementById('appVersionInput').value = s.appVersion || '';
+  applyAppVersion(s.appVersion);
   document.getElementById('reportFormat').value = s.reporterFormat || 'behavior';
   document.getElementById('reportBaseUrl').value = s.reporterBaseUrl || '';
   document.getElementById('reportToken').value = s.reporterToken || '';
@@ -1416,6 +1431,7 @@ async function loadHeaderReporter() {
   reportEnabled = !!s.reporterEnabled;
   renderHeaderReporter();
   applyAppTitle(s.appTitle);
+  applyAppVersion(s.appVersion);
 }
 // 顶部开关点击：立即持久化（不依赖「保存设置」按钮）
 async function toggleHeaderReporter() {
@@ -1433,6 +1449,7 @@ function toggleReporter() {
 async function saveReportSettings() {
   const body = {
     appTitle: document.getElementById('appTitleInput').value,
+    appVersion: document.getElementById('appVersionInput').value,
     reporterEnabled: reportEnabled,
     reporterFormat: document.getElementById('reportFormat').value,
     reporterBaseUrl: document.getElementById('reportBaseUrl').value,
@@ -1442,8 +1459,17 @@ async function saveReportSettings() {
     reporterFilters: document.getElementById('reportFilters').value,
     streamPassthrough: document.getElementById('reportPassthrough').value,
   };
-  await fetch('/api/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  let res;
+  try {
+    res = await fetch('/api/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  } catch { showToast('保存失败：网络错误'); return; }
+  if (!res.ok) {
+    if (res.status === 403) { showToast('保存失败：需要管理员权限（登录可能已过期，请重新点右上角🔒解锁）'); applyAdminUI(false); }
+    else showToast('保存失败：' + res.status);
+    return;
+  }
   applyAppTitle(body.appTitle);
+  applyAppVersion(body.appVersion);
   const saved = document.getElementById('reportSaved');
   saved.style.display = '';
   setTimeout(() => saved.style.display = 'none', 1500);
@@ -1453,7 +1479,7 @@ async function saveReportSettings() {
 // ── 字段映射（按上送目标接口 + 文档 schema 驱动）─────────
 const MAP_SOURCES = ['','um','const','uuid','config','req','res','reqText','resText','record']; // '' = 不映射
 const SOURCE_LABEL = { '':'— 不映射', um:'UM号(系统用户名)', const:'const 固定值', uuid:'uuid', config:'config 配置项', req:'req 请求体', res:'res 响应体', reqText:'reqText 请求原文', resText:'resText 响应原文', record:'record 元数据' };
-const MAP_TRANSFORMS = ['','joinMessages','isoDate','string','number','sseContent','sseCode','sseToolCode','sseCodeAll','extractCode','sseModel','sseFinishReason','ssePromptTokens','sseCompletionTokens','sseTotalTokens'];
+const MAP_TRANSFORMS = ['','joinMessages','promptAny','promptSize','promptMd5','isoDate','string','number','sseContent','sseCode','sseToolCode','sseCodeAll','extractCode','sseModel','sseFinishReason','ssePromptTokens','sseCompletionTokens','sseTotalTokens'];
 const ARG_HINT = { '':'(不映射)', um:'(自动取右上角 UM 号)', const:'固定值', config:'配置键，如 reporterTriggerVersion', req:'请求体路径，如 model', res:'响应体路径，如 choices.0.message.content', record:'元数据，如 statusCode / requestHeaders.x-user-id', uuid:'(无需填)', reqText:'(整段请求文本)', resText:'(整段响应文本)' };
 const ARG_DISABLED_SRC = ['','um','uuid','reqText','resText'];
 const TARGET_HINTS = {
@@ -1641,7 +1667,7 @@ function renderQueue(snap) {
     const rid = h.recordId != null
       ? `<span class="locator" onclick="event.stopPropagation();locateTraffic(${h.recordId})" title="定位到左侧抓包列表 #${h.recordId}">#${h.recordId} ↗</span>`
       : '<span style="color:#6e7681">-</span>';
-    return `<tr style="cursor:pointer" onclick="showQueueDetail(${h.qid})" title="点击预览上送报文">
+    return `<tr id="hrow-${h.qid}" style="cursor:pointer" onclick="showQueueDetail(${h.qid})" title="点击预览上送报文">
       <td style="color:#8b949e">${h.qid}</td>
       <td>${rid}</td>
       <td title="${esc(h.url)}">${esc(shortUrl(h.url))}</td>

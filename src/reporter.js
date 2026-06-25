@@ -89,10 +89,9 @@ class Reporter extends EventEmitter {
     if (record.statusCode == null) return false;          // 未完成的不送（响应还没回来）
     if (record.id != null && this.enqueuedIds.has(record.id)) return false; // 去重，避免补送重复
 
-    // 提前计算上送报文：result 为空说明模型本轮没有产生代码，跳过
-    const mapping = settings.mappingForUrl(record.url);
-    const preview = toSaveRecord(record, { mapping, config: cfg });
-    if (!preview.result) return false;
+    // 提前计算上送报文：result（SSE 全部内容）与 acceptResult（提取出的代码）
+    // 任一为空都跳过——既无内容、或本轮没产出代码，都不上送。
+    if (!this._passesContentFilter({ record }, cfg)) return false;
 
     if (record.id != null) this.enqueuedIds.add(record.id);
     const entry = {
@@ -156,6 +155,14 @@ class Reporter extends EventEmitter {
     return this.queue.filter(e => e.status === 'pending').length;
   }
 
+  // 内容过滤（入队、发送共用）：要求 result（SSE 全部内容）与 acceptResult（提取代码）
+  // 都非空，任一为空都不上送。按当前映射重算，故能挡住"旧规则入队/持久化历史"的条目。
+  _passesContentFilter(entry, cfg) {
+    const mapping = settings.mappingForUrl(entry.record.url);
+    const preview = toSaveRecord(entry.record, { mapping, config: cfg });
+    return !!preview.result && !!preview.acceptResult;
+  }
+
   // ── 发送 ────────────────────────────────────────────
   async _flush() {
     if (this.flushing || !this.queue.length) return;
@@ -170,6 +177,15 @@ class Reporter extends EventEmitter {
         .slice(0, REPORTER_BATCH_SIZE);
 
       for (const entry of batch) {
+        // 发送前二次校验：result 或 acceptResult 为空则丢弃（不发、不重试）。
+        // 覆盖"旧规则/持久化历史入队"的条目——它们入队时也许通过了，但按当前规则不该上送。
+        if (!this._passesContentFilter(entry, cfg)) {
+          this.queue = this.queue.filter(e => e !== entry);
+          console.log(`[reporter] 条目 #${entry.qid} result/acceptResult 为空，按规则丢弃不上送`);
+          this._persist();
+          this.emit('change', this.snapshot());
+          continue;
+        }
         entry.status = 'sending';
         this._persist();
         this.emit('change', this.snapshot());

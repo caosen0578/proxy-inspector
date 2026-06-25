@@ -45,7 +45,8 @@ result = 所有 SSE chunk 的 choices[0].text 拼接
 | language | 请求体 `extra.language` |
 | filePath | 请求体 `extra.file_name` |
 | repository | 请求体 `extra.repo_name` |
-| prompt | 请求体 `prompt` 字段（代码上文） |
+| prompt | 请求体 `prompt` 字段（代码上文）。由 `promptAny` 统一处理：对话接口取 `messages`、补全接口取 `prompt`，两边兼容 |
+| promptSize / promptMd5 | 对 prompt 算 UTF-8 字节数 / MD5（纯计算） |
 
 ---
 
@@ -55,39 +56,44 @@ result = 所有 SSE chunk 的 choices[0].text 拼接
 
 **优先级 1：工具调用写入代码（最高）**
 
-遍历 SSE 中所有 `delta.tool_calls`，拼接 `function.arguments`，JSON.parse 后提取：
-- `write_to_file` → `arguments.content`（完整文件代码）
-- `replace_in_file` → `arguments.new_str`（替换后代码片段）
+从所有 `delta.tool_calls` 的 `function.arguments` 里还原写入代码，JSON.parse 后按优先级取：
+`new_str ?? content ?? code ?? newText`
+- `write_to_file` → 取 `content`（完整文件代码）
+- `replace_in_file` → 取 `new_str`（替换后代码片段）
 - `read_file` / `read_lints` / `search` 等只读工具 → 无上述字段，自动跳过
 - 多个写入工具调用结果用 `\n\n` 拼接
 
-#### ⚠️ 工具调用分片重组规则（重要）
+#### ⚠️ 工具调用分片重组规则（重要 / 抗模型精度问题）
 
-SSE 把 `tool_calls` 拆成多个分片流式传输，必须正确重组才能拿到完整的 `arguments`。
+SSE 把 `tool_calls` 拆成多个分片流式传输；且**模型精度问题**会引入多种异常，
+必须充分容错才能稳定拿到 `arguments`：
 
-**坑**：本模型（glm5-0）偶发会把**一次响应里的多个工具调用都标成 `index:0`**。
-此时若按 `index` 归并，会把多个调用拼到一起：
-- name 拼成 `write_to_filewrite_to_file`（表象）
-- arguments 首尾相接拼成非法 JSON `{...}{...}` → `JSON.parse` 失败 → **代码全部丢失**
-
-**正确做法（按边界切分，不按 index 归并）**：
-
-| 分片特征 | 判定 |
+| 异常表现 | 成因 |
 |---------|------|
-| 带 `id` 或 `function.name` | 新工具调用开始 |
-| 只带 `function.arguments`（无 id、无 name） | 上一个调用的续传分片，仅追加 arguments |
+| 多个工具调用都标 `index:0` | 模型不递增 index |
+| `function.name` 黏连成 `write_to_filewrite_to_file` | 模型把同一次 write 拆进多个带 name 的分片 |
+| 同一次 write 整个发两遍 | 模型重复输出 |
+| content 被拆到多个分片中间 | 流式分片 |
 
-这样既兼容标准 OpenAI（index 递增），也兼容本模型（index 恒 0）。
-`replace_in_file` 偶发出现两次同理——按边界拆开后两段 `new_str` 都能正常提取。
+**做法：完全不依赖 `id` / `name` / `index`。**（早期"按边界切分"的 `sseToolCalls` 已废弃，
+因为它依赖 name/id，遇到上面的黏连/重复就会把 `arguments` 劈半成非法 JSON 而丢失代码。）
 
-> 实现见 `src/reporter-mapping.js` → `sseToolCalls()`
+现行算法（`src/reporter-mapping.js` → `toolCallsCode()` + `splitJsonObjects()`）：
 
-示例（两个 `write_to_file` 都在 index:0）：
+1. 把**所有** `tool_calls[].function.arguments` 分片**按出现顺序全量拼接**成一个大字符串；
+2. 用**括号配平**（正确处理字符串内的引号/转义/花括号）从中切出一个个**完整 JSON 对象**；
+3. 每个对象按 `new_str ?? content ?? code ?? newText` 取代码；
+4. **按代码文本去重**（同一次 write 发两遍时只保留一份，避免重复上送、代码量虚高）；
+5. 半截 / 非法 JSON 分片 `try/catch` 跳过，不影响其它合法对象。
+
+这样无论名字黏连、id 重复、index 恒 0、content 被拆几段、还是整次重复，都能正确还原。
+
+示例（同一次 write 被拆进两个带 name 的分片，名字黏连）：
 ```
-data:{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"t1","index":0,"function":{"name":"write_to_file","arguments":"{...A...}"}}]}}]}
-data:{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"t2","index":0,"function":{"name":"write_to_file","arguments":"{...B...}"}}]}}]}
+data:{"choices":[{"delta":{"tool_calls":[{"function":{"name":"write_to_file","arguments":"{\"content\":\"class A {"}}]}}]}
+data:{"choices":[{"delta":{"tool_calls":[{"function":{"name":"write_to_file","arguments":" int x; }\"}"}}]}}]}
 ```
-→ 正确拆成两个调用，A、B 的 content 都提取，用 `\n\n` 拼接。
+→ 拼接为 `{"content":"class A { int x; }"}` → 正确提取 `class A { int x; }`。
 
 **优先级 2：delta.content ``` 围栏代码块**
 
@@ -113,18 +119,35 @@ function extractGeneratedCode(raw):
 
 ---
 
-## 四、过滤机制（两接口通用）
+## 四、result 与 acceptResult 的区别（重要）
 
-1. **入队前过滤**：`reporter.push()` 先跑 `toSaveRecord`，若 `result` 为空 → `return false`，不入队
-2. **业务成功判定**：上送后检查 `data.code === '0'`；`code:"1"` 视为失败 → 自动重试（最多 5 次）
+两者**取值规则不同**：
+
+| 字段 | transform | 取什么 |
+|------|-----------|--------|
+| **result** | `sseContent` | **SSE 解析后的全部内容**（拼接所有 `choices[0].delta.content` / `choices[0].text`），不含工具调用 arguments |
+| **acceptResult** | `sseCodeAll` | **AI 实际产出代码**（上面"代码提取规则"三级优先：工具调用 / 围栏 / 补全裸代码） |
+
+> 补全接口 `/v2/completions`：`result` 与 `acceptResult` 往往一致（都来自 `choices[0].text`）。
+> 对话接口 `/v2/chat/completions`：纯工具调用时 `delta.content` 可能为空 → `result` 为空，而 `acceptResult` 有代码。
 
 ---
 
-## 五、对照表
+## 五、过滤机制（两接口通用）
 
-| 接口 | result/acceptResult 取什么 | codeLines/codeSize 怎么算 |
-|------|--------------------------|--------------------------|
-| `/v2/completions` | SSE `choices[0].text` 全量拼接 | 全量文本的行数/字节数 |
-| `/v2/chat/completions` | 工具调用：`write_to_file.content` + `replace_in_file.new_str` | 工具调用代码的行数/字节数之和 |
+1. **内容过滤（入队 + 发送前都校验）**：`result` 或 `acceptResult` **任一为空 → 不上送**。
+   - 入队时：`reporter.push()` → `_passesContentFilter` 不过则不入队。
+   - 发送前：`_flush()` 对每条再校验一次（按当前映射重算），不过则**直接丢弃**（不发、不重试）。
+     这样能挡住"旧规则入队 / `reporter-queue.json` 持久化"的历史脏条目。
+2. **业务成功判定**：上送后检查 `data.code === '0'`；`code:"1"` 视为失败 → 自动重试（最多 5 次）。
 
-> **核心理念**：`result`/`acceptResult` 提取的是"AI 实际写入本地文件的那部分代码"，纯聊天说明文字不计入。
+---
+
+## 六、对照表
+
+| 接口 | result（全部内容） | acceptResult（代码） | codeLines/codeSize |
+|------|------------------|---------------------|--------------------|
+| `/v2/completions` | `choices[0].text` 全量拼接 | 同左（补全裸代码即代码） | 按 acceptResult 算 |
+| `/v2/chat/completions` | `delta.content` 拼接（说明文字，可能为空） | 工具调用 `write_to_file.content` + `replace_in_file.new_str` | 按 acceptResult 算 |
+
+> **核心理念**：`acceptResult` 是"AI 实际写入本地文件的那部分代码"；`result` 是模型这轮回复的完整文本内容。两者任一为空都不上送。

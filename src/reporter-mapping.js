@@ -71,42 +71,61 @@ function sseJoinContent(raw) {
   }).join('');
 }
 
-// 重组 SSE 流里的 tool_calls → 按出现顺序的工具调用数组。
+// 从一段文本里按括号配平切出一个个顶层 JSON 对象（正确处理字符串内的引号/转义/花括号）。
+// 用于把流式拼接出来的 tool_calls arguments 还原成完整对象，不依赖 id/name/index 切分。
+function splitJsonObjects(s) {
+  const objs = [];
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '{') { if (depth === 0) start = i; depth++; }
+    else if (ch === '}' && depth > 0) {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        try { objs.push(JSON.parse(s.slice(start, i + 1))); } catch { /* 半截/非法 JSON 跳过 */ }
+        start = -1;
+      }
+    }
+  }
+  return objs;
+}
+
+// 从 tool_calls 参数里提取写入的代码：优先 new_str，其次 content/code/newText。
 //
-// ⚠️ 关键：本模型(glm5-0)偶发把一次响应里的多个工具调用都标成 index:0。
-// 若按 index 归并，多个调用的 name 会被拼成 write_to_filewrite_to_file，
-// 且 arguments 被首尾相接拼成非法 JSON（{...}{...}）→ JSON.parse 失败 → 代码全丢。
-// 因此改为按"边界"切分：分片带 id 或 function.name = 新调用开始；
-// 只带 arguments（无 id、无 name）= 上一个调用的续传分片。
-// 这样既兼容标准 OpenAI（index 递增），也兼容本模型（index 恒 0）。
-function sseToolCalls(raw) {
-  const calls = [];
-  let cur = null;
+// ⚠️ 本模型(glm5-0)偶发把同一次 write 的 content 拆进多个带 name 的分片里
+// （表现为 write_to_filewrite_to_file），按 id/name/index 切分会把 content 劈成两半、
+// 两半都不是合法 JSON 而全部丢失。因此这里【完全不依赖 id/name/index】：
+// 把所有 arguments 分片按出现顺序全量拼接，再用括号配平切出每个完整 JSON 对象。
+// 这样无论同一调用被拆几段、还是多个真实调用首尾相接（{...}{...}），都能正确还原。
+function toolCallsCode(raw) {
+  let buf = '';
   for (const c of parseSSE(raw)) {
     const ch = c.choices && c.choices[0];
     const tcs = ch && ch.delta && ch.delta.tool_calls;
     if (!Array.isArray(tcs)) continue;
     for (const tc of tcs) {
-      const fn = tc.function || {};
-      if (tc.id || fn.name) {            // 新工具调用开始
-        cur = { name: fn.name || '', args: fn.arguments || '' };
-        calls.push(cur);
-      } else if (cur) {                  // 续传分片：只追加 arguments
-        if (fn.arguments) cur.args += fn.arguments;
-      }
+      const a = tc.function && tc.function.arguments;
+      if (typeof a === 'string') buf += a;
     }
   }
-  return calls;
-}
-
-// 从 tool_calls 参数里提取写入的代码：优先 new_str，其次 content/code/newText
-function toolCallsCode(raw) {
   const out = [];
-  for (const c of sseToolCalls(raw)) {
-    let obj; try { obj = JSON.parse(c.args); } catch { continue; }
+  const seen = new Set();
+  for (const obj of splitJsonObjects(buf)) {
     if (!obj || typeof obj !== 'object') continue;
     const code = obj.new_str ?? obj.content ?? obj.code ?? obj.newText;
-    if (typeof code === 'string' && code) out.push(code);
+    if (typeof code !== 'string' || !code) continue;
+    // 去重：精度问题会让模型把同一次 write 整个发两遍（write_to_filewrite_to_file），
+    // 切出两个内容相同的 JSON 对象。按 code 文本去重，避免上送重复代码、虚高代码量。
+    if (seen.has(code)) continue;
+    seen.add(code);
+    out.push(code);
   }
   return out.join('\n\n');
 }
@@ -137,14 +156,34 @@ function extractGeneratedCode(raw) {
   return '';
 }
 
+// messages 数组 → 拼接文本（"role: content"，逐条换行）
+function messagesToText(v) {
+  if (!Array.isArray(v)) return typeof v === 'string' ? v : '';
+  return v.map(m => (m && typeof m.content === 'string') ? `${m.role || ''}: ${m.content}` : '')
+          .filter(Boolean).join('\n');
+}
+
+// 从请求体原文里取「提示词」，两个接口都兼容：
+//   对话 /v2/chat/completions：请求体 messages 数组 → 拼接
+//   补全 /v2/completions：请求体 prompt 字段（代码上文）
+function promptFromReqText(raw) {
+  const obj = safeParse(raw);
+  if (!obj) return typeof raw === 'string' ? raw : '';
+  if (Array.isArray(obj.messages)) return messagesToText(obj.messages);
+  if (typeof obj.prompt === 'string') return obj.prompt;
+  return '';
+}
+
 // 转换函数注册表：transform 名 → (value) => newValue
 const TRANSFORMS = {
   // OpenAI messages 数组 → 拼接文本
-  joinMessages(v) {
-    if (!Array.isArray(v)) return typeof v === 'string' ? v : '';
-    return v.map(m => (m && typeof m.content === 'string') ? `${m.role || ''}: ${m.content}` : '')
-            .filter(Boolean).join('\n');
-  },
+  joinMessages(v) { return messagesToText(v); },
+  // 请求体原文 → 提示词（兼容对话 messages / 补全 prompt），配合 source:'reqText'
+  promptAny(raw) { return promptFromReqText(raw); },
+  // 提示词字节数（UTF-8）：对 promptAny 的结果算
+  promptSize(raw) { return Buffer.byteLength(promptFromReqText(raw), 'utf8'); },
+  // 提示词 MD5：对 promptAny 的结果算
+  promptMd5(raw) { return crypto.createHash('md5').update(promptFromReqText(raw), 'utf8').digest('hex'); },
   isoDate(v) { const d = new Date(v ?? Date.now()); return isNaN(d) ? null : d.toISOString(); },
   string(v) { return v == null ? null : (typeof v === 'string' ? v : JSON.stringify(v)); },
   number(v) { const n = Number(v); return isNaN(n) ? null : n; },
@@ -188,11 +227,13 @@ const DEFAULT_MAPPING = {
   pluginVersion:      { source: 'config', key: 'reporterTriggerVersion' },
   createdBy:          { source: 'um' }, // UM号=系统用户名（右上角自动获取），统计个人代码生成率
   sessionId:          { source: 'record', path: 'requestHeaders.x-conversation-id' },
-  requestId:          { source: 'record', path: 'requestHeaders.x-request-trace-id' },
+  requestId:          { source: 'record', path: 'requestHeaders.x-conversation-message-id' },
   type:               { source: 'const',  value: 'CODE_CHAT' },
-  result:             { source: 'resText', transform: 'sseCodeAll' }, // 只上送 markdown 代码块里的代码
-  acceptResult:       { source: 'resText', transform: 'sseCodeAll' },
-  prompt:             { source: 'req',    path: 'messages', transform: 'joinMessages' },
+  result:             { source: 'resText', transform: 'sseContent' },  // 模型返回 SSE 解析后的全部内容
+  acceptResult:       { source: 'resText', transform: 'sseCodeAll' },  // AI 实际产出代码（extractGeneratedCode 三级优先）
+  prompt:             { source: 'reqText', transform: 'promptAny' }, // 对话 messages / 补全 prompt 都兼容
+  promptSize:         { source: 'reqText', transform: 'promptSize' },
+  promptMd5:          { source: 'reqText', transform: 'promptMd5' },
   scope:              { source: 'record', path: 'requestHeaders.x-ide-type' },
   isStatistics:       { source: 'const',  value: 1 },
   modelName:          { source: 'resText', transform: 'sseModel' },
@@ -206,7 +247,7 @@ const DEFAULT_MAPPING = {
   triggerType:        { source: 'const',  value: 'auto' },
   apiUrl:             { source: 'record', path: 'url' },
   finishReason:       { source: 'resText', transform: 'sseFinishReason' },
-  // 生成代码量统计（与 result 同源，按 AI 实际产出代码计算）
+  // 生成代码量统计（与 acceptResult 同源，按 AI 实际产出代码计算）
   codeLines:          { source: 'resText', transform: 'sseCodeLines' },
   codeSize:           { source: 'resText', transform: 'sseCodeSize' },
   // 补全接口上下文（来自请求体 extra.*，对话接口无则降级 null）

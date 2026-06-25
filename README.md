@@ -134,8 +134,8 @@ npm start
     - `sseToolCode` —— 只取 `tool_calls` 参数里写入的代码（`new_str`/`content`/`code`，写文件型补全 replace_in_file/write_file）
     - **`sseCodeAll`** —— markdown 代码块 + 工具调用代码**都覆盖**；`result`/`acceptResult` 默认用它，**只上送代码**以统计代码生成率
     - `sseModel` / `sseFinishReason` / `ssePromptTokens` / `sseCompletionTokens` / `sseTotalTokens` —— 取模型名 / 结束原因 / token 用量
-  - **`result` / `acceptResult` 默认上送的是 `sseCodeAll` 提取出的纯代码**（对话贴码、行内补全、工具调用写文件三种都覆盖），不是 SSE 原文。
-- `record` 也可取报文头：如 `requestHeaders.x-request-trace-id`、`responseHeaders.x-request-id`（头名一律小写）。
+  - **`result`** 默认上送 `sseContent`（SSE 解析后的**全部内容**）；**`acceptResult`** 默认上送 `sseCodeAll` 提取出的**纯代码**（对话贴码、行内补全、工具调用写文件三种都覆盖）。两者任一为空则该报文不上送。
+- `record` 也可取报文头：如 `requestHeaders.x-conversation-message-id`、`responseHeaders.x-request-id`（头名一律小写）。
 
 ### 内置预设：CodeBuddy / dsv4（SSE 流式）
 
@@ -143,11 +143,12 @@ npm start
 
 | 目标字段 | 来源 | 说明 |
 | --- | --- | --- |
-| `requestId` | `requestHeaders.x-request-trace-id` | 请求头里的链路 ID |
+| `requestId` | `requestHeaders.x-conversation-message-id` | 请求头里的消息 ID |
 | `modelId` | `req.model` | 如 `custom:dsv4` |
 | `modelName` | `resText` + `sseModel` | 流里的 `model`，如 `dsv4` |
 | `prompt` | `req.messages` + `joinMessages` | 拼接 system/user 内容 |
-| `result` / `acceptResult` | `resText` + `sseCodeAll` | **只取代码**（markdown 代码块 + 工具调用 new_str）|
+| `result` | `resText` + `sseContent` | SSE 解析后的**全部内容** |
+| `acceptResult` | `resText` + `sseCodeAll` | **只取代码**（markdown 代码块 + 工具调用 content/new_str）|
 | `promptTokens` 等 | `resText` + `sseUsage*` | 末个含 `usage` 的 chunk |
 | `finalReason` | `resText` + `sseFinishReason` | 如 `tool_calls` |
 

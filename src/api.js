@@ -150,6 +150,8 @@ function buildRouter() {
   r.get('/queue/:qid', (req, res) => {
     const entry = reporter.getEntry(req.params.qid);
     if (!entry) return res.status(404).json({ error: 'not found' });
+    // 上送请求地址(target)仅管理员可见，非管理员掩码（apiToken 在 reporter 里已一律掩码）
+    if (!admin.isAdmin(sidOf(req)) && entry.target) entry.target = '••••••（仅管理员可见）';
     res.json(entry);
   });
   r.post('/queue/retry', (req, res) => res.json(reporter.retryFailed()));

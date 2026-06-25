@@ -31,6 +31,7 @@ robocopy scripts         "%OUT%\scripts"         /e /njh /njs /ndl /nc /ns /xf g
 copy /y package.json      "%OUT%\" >nul
 copy /y package-lock.json "%OUT%\" >nul
 copy /y start.cmd         "%OUT%\" >nul
+copy /y start.sh          "%OUT%\" >nul
 copy /y *.md              "%OUT%\" >nul
 
 echo [4/4] DONE.
