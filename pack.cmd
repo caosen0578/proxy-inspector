@@ -1,5 +1,4 @@
 @echo off
-chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
 set OUT=dist\proxy-inspector
@@ -32,7 +31,8 @@ copy /y package.json      "%OUT%\" >nul
 copy /y package-lock.json "%OUT%\" >nul
 copy /y start.cmd         "%OUT%\" >nul
 copy /y start.sh          "%OUT%\" >nul
-copy /y *.md              "%OUT%\" >nul
+copy /y *.docx           "%OUT%\" >nul
+copy /y Ê¹ÓÃÊÖ²á.md       "%OUT%\" >nul
 
 echo [4/4] DONE.
 echo.

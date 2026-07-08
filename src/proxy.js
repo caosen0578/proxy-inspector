@@ -44,9 +44,29 @@ function startProxy() {
 
   proxy.use(Proxy.gunzip);
 
-  proxy.onError((ctx, err) => {
-    if (['ECONNRESET', 'EPIPE', 'ERR_STREAM_DESTROYED', 'ECONNREFUSED'].includes(err.code)) return;
-    console.error('[proxy] error:', err.message);
+  proxy.onError((ctx, err, kind) => {
+    // 客户端主动断开 / 正常流关闭产生的噪音，不记
+    if (['ECONNRESET', 'EPIPE', 'ERR_STREAM_DESTROYED'].includes(err.code)) return;
+    // 其余（含上游连不上 ECONNREFUSED/ETIMEDOUT、DNS ENOTFOUND/EAI_AGAIN、连接建立超时断开）
+    // 都打出来，便于定位偶发 3003：请求根本没到后台时，这里会有对应上游错误。
+    let where = '';
+    try { where = ctx ? '  ' + buildUrl(ctx) : ''; } catch {}
+    console.error(`[proxy] ${kind || 'error'}: ${err.message}${where}`);
+    // 上游链路失败的请求在抓包列表里标成 504，现场一眼能看到失败条目和原因
+    // （仅限上游侧错误 kind，且只在还没收到真实响应时标记，绝不覆盖已有响应；
+    //   不 reporter.push——失败请求不是有效 AI 交互，不上送埋点）
+    if (ctx && ctx._recordId && !ctx._errRecorded && /SERVER/.test(kind || '')) {
+      const rec = trafficStore.get(ctx._recordId);
+      if (rec && rec.statusCode == null) {
+        ctx._errRecorded = true;
+        trafficStore.update(ctx._recordId, {
+          statusCode: 504,
+          responseHeaders: { 'x-proxy-inspector-error': kind },
+          responseBody: `[proxy] ${kind}: ${err.message}`,
+          duration: ctx._startAt ? Date.now() - ctx._startAt : null,
+        });
+      }
+    }
   });
 
   proxy.onRequest((ctx, callback) => {
@@ -91,6 +111,38 @@ function startProxy() {
       });
       ctx._recordId = record.id;
       ctx._startAt = record._startAt;
+
+      // 给「建立到上游的连接(TCP + TLS 握手)」加超时：连接迟迟握不上手(路由黑洞/丢包/
+      // 被 TLS 中间设备静默拦截)就主动断开 → 客户端立刻拿到 504，而不是干等到它自己的
+      // headers timeout(偶发 3003：请求根本没到后台、后台无日志)。此时机 ctx.proxyToServerRequest
+      // 已创建、socket 正在连接（库随后才 .end() 发出请求）。
+      // 关键：只约束「连接建立」——连接一旦就绪(secureConnect/connect)即撤销计时，之后等
+      // 模型出首字/流式思考再久也不打断，故 SSE 补全不受影响。
+      // 注意 HTTPS 的「已就绪」必须看 TLS 握手是否完成，不能只看 TCP(socket.connecting)：
+      // TCP 常在本代码执行前的 1~2ms 内就连上，而 TLS 握手被中间设备卡死恰是 3003 的典型场景。
+      // 判据用 secureConnecting（实测：TCP 已连但握手卡死时恒为 true，secureConnect 后变 false）。
+      // 勿用 getProtocol()——实测 Node 24 在未连接/握手中也返回 'TLSv1.3'，不可作握手完成判据。
+      // 极老 Node 无 secureConnecting 时退化为只看 TCP：宁可漏守护，绝不误杀已建立的连接。
+      const upstream = ctx.proxyToServerRequest;
+      if (upstream && !upstream.destroyed) {
+        const guard = (socket) => {
+          const established = () => ctx.isSSL
+            ? (typeof socket.secureConnecting === 'boolean' ? socket.secureConnecting === false : socket.connecting === false)
+            : socket.connecting === false;
+          if (established()) return; // 已就绪(极快连接/复用)，无需守护
+          const timer = setTimeout(() => {
+            if (upstream.destroyed || established()) return; // 就绪后绝不误杀(事件竞态兜底)
+            console.error(`[proxy] 连接上游 ${config.UPSTREAM_CONNECT_TIMEOUT_MS}ms 未就绪(TCP/TLS 握手卡死)，主动断开: ${method} ${url}`);
+            upstream.destroy(new Error(`upstream connection not established within ${config.UPSTREAM_CONNECT_TIMEOUT_MS}ms (connect timeout)`));
+          }, config.UPSTREAM_CONNECT_TIMEOUT_MS);
+          const clear = () => clearTimeout(timer);
+          socket.once(ctx.isSSL ? 'secureConnect' : 'connect', clear);
+          socket.once('error', clear);
+          socket.once('close', clear);
+        };
+        if (upstream.socket) guard(upstream.socket);
+        else upstream.once('socket', guard);
+      }
       cb();
     });
 
@@ -171,7 +223,7 @@ function startProxy() {
     callback();
   });
 
-  proxy.listen({ port: config.PROXY_PORT, sslCaDir: config.CERTS_DIR }, (err) => {
+  proxy.listen({ port: config.PROXY_PORT, host: settings.bindHost(), sslCaDir: config.CERTS_DIR }, (err) => {
     if (err) { console.error('\x1b[31m[proxy] 启动失败:\x1b[0m', err); process.exit(1); }
     // 启动横幅由 index.js 统一打印，这里只补一条证书路径
     console.log(`\x1b[90m  根证书: ${require('path').resolve(config.CERTS_DIR, 'certs', 'ca.pem')}\x1b[0m`);

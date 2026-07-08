@@ -8,7 +8,7 @@ set PROXY_PORT=28899
 set UI_PORT=28900
 
 cd /d "%~dp0"
-echo Proxy: 127.0.0.1:%PROXY_PORT%    UI: http://127.0.0.1:%UI_PORT%
+echo Proxy: http://127.0.0.1:%PROXY_PORT%    UI: http://127.0.0.1:%UI_PORT%
 echo.
 node src/index.js
 echo.

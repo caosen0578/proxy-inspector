@@ -7,6 +7,7 @@ const { createApp } = require('./api');
 const { startProxy } = require('./proxy');
 const reporter = require('./reporter');
 const config = require('./config');
+const settings = require('./settings');
 
 // ── 终端颜色（无依赖；NO_COLOR 或非 TTY 时自动关闭）──────────
 const useColor = !process.env.NO_COLOR;
@@ -25,13 +26,26 @@ function banner() {
   console.log('');
 }
 
+// ── Node 版本自检 ───────────────────────────────────────────
+// Node < 20 无 Happy Eyeballs(autoSelectFamily 默认关)：MITM 内部回环隧道会连到 IPv6 ::1
+// 而内部服务器只绑 127.0.0.1 → HTTPS 拦截偶发/必现失败 → CodeBuddy 报 3003 Headers Timeout。
+// patches 已强制内部隧道走 127.0.0.1 兜底，但仍强烈建议 Node ≥ 20，故启动时醒目提示（不阻止启动）。
+function checkNodeVersion() {
+  const major = parseInt(process.versions.node.split('.')[0], 10);
+  if (major < 20) {
+    console.log(c('red', c('bold', `⚠ 检测到 Node ${process.versions.node}（< 20），强烈建议升级到 Node 20 及以上。`)));
+    console.log(c('yellow', '  低版本 Node 可能导致 HTTPS 抓取偶发失败（客户端报 3003 Cannot connect: Headers Timeout）。'));
+    console.log('');
+  }
+}
+
 // ── 端口占用检测与处理 ──────────────────────────────────────
 function portInUse(port) {
   return new Promise(res => {
     const s = net.createServer();
     s.once('error', e => res(e.code === 'EADDRINUSE'));
     s.once('listening', () => s.close(() => res(false)));
-    s.listen(port); // 与真实 server.listen(port) 一致的绑定方式，避免 IPv4/IPv6 漏检
+    s.listen(port, settings.bindHost()); // 与真实 server.listen 一致（同一网卡），避免误判空闲
   });
 }
 
@@ -120,21 +134,36 @@ server.on('error', err => {
   process.exit(1);
 });
 server.on('upgrade', (req, socket, head) => {
+  // 同 HTTP 面板一样做 Host 白名单：WS 会推送抓到的报文(含代码)，防 DNS rebinding 借道订阅。
+  // 开了局域网访问(lanAccess)时放行任意 Host（此时是有意暴露给局域网）。
+  const host = (req.headers.host || '').split(':')[0].toLowerCase().replace(/^\[|\]$/g, '');
+  const ok = settings.get().lanAccess || host === '' || host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  if (!ok) {
+    socket.destroy();
+    return;
+  }
   wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
 });
 
 (async () => {
   banner();
+  checkNodeVersion();
   // UI 与代理两个端口都先确保可用
   await ensurePortFree(config.UI_PORT, 'Web 面板');
   await ensurePortFree(config.PROXY_PORT, '代理');
 
-  server.listen(config.UI_PORT, () => {
+  const host = settings.bindHost();
+  const lan = host === '0.0.0.0';
+  server.listen(config.UI_PORT, host, () => {
     console.log(c('green', '✓ Web 面板') + '  ' + c('cyan', `http://127.0.0.1:${config.UI_PORT}`));
   });
   startProxy();
-  console.log(c('green', '✓ 代理已启动') + '  ' + c('cyan', `127.0.0.1:${config.PROXY_PORT}`) +
+  console.log(c('green', '✓ 代理已启动') + '  ' + c('cyan', `http://127.0.0.1:${config.PROXY_PORT}`) +
               c('gray', '  ← 浏览器/系统代理指向这里'));
+  if (lan) {
+    console.log(c('red', '⚠ 局域网访问已开启（绑定 0.0.0.0）') +
+                c('gray', '  局域网其他机器可访问本机面板/代理，注意安全，用完请关闭'));
+  }
   console.log(c('gray', '  按 Ctrl+C 退出（退出前会持久化未完成的上送队列）'));
   console.log('');
 })();

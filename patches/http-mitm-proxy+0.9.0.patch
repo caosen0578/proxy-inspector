@@ -13,10 +13,22 @@ index beb573e..6ca75e6 100644
    attrsServer.unshift({
      name: 'commonName',
 diff --git a/node_modules/http-mitm-proxy/lib/proxy.js b/node_modules/http-mitm-proxy/lib/proxy.js
-index f231062..ed70f8b 100644
+index f231062..b59a1eb 100644
 --- a/node_modules/http-mitm-proxy/lib/proxy.js
 +++ b/node_modules/http-mitm-proxy/lib/proxy.js
-@@ -968,6 +968,26 @@ Proxy.prototype._onWebSocketFrame = function(ctx, type, fromServer, data, flags)
+@@ -391,6 +391,11 @@ Proxy.prototype._onHttpServerConnectData = function(req, socket, head) {
+     // open a TCP connection to the remote host
+     var conn = net.connect({
+       port: port,
++      // 显式指定 host：不指定时 net.connect 默认连 'localhost'，在 Windows/新版 Node 上会
++      // 优先解析成 IPv6 ::1，而内部 MITM 服务器只绑在 127.0.0.1(IPv4)，于是隧道连到 ::1:<port>
++      // 被拒 → PROXY_TO_PROXY_SOCKET_ERROR: connect ECONNREFUSED ::1:<port>，HTTPS 拦截偶发失败
++      // (Node<20 无 Happy Eyeballs 时为硬失败)。固定走内部服务器实际绑定的回环地址。
++      host: (self.httpHost && self.httpHost !== '0.0.0.0') ? self.httpHost : '127.0.0.1',
+       allowHalfOpen: true
+     }, function() {
+       // create a tunnel between the two hosts
+@@ -968,6 +973,26 @@ Proxy.prototype._onWebSocketFrame = function(ctx, type, fromServer, data, flags)
    });
  };
  
@@ -43,7 +55,7 @@ index f231062..ed70f8b 100644
  Proxy.prototype._onWebSocketClose = function(ctx, closedByServer, code, message) {
    if (!ctx.closedByServer && !ctx.closedByClient) {
      ctx.closedByServer = closedByServer;
-@@ -980,9 +1000,9 @@ Proxy.prototype._onWebSocketClose = function(ctx, closedByServer, code, message)
+@@ -980,9 +1005,9 @@ Proxy.prototype._onWebSocketClose = function(ctx, closedByServer, code, message)
        }
        if (ctx.clientToProxyWebSocket.readyState !== ctx.proxyToServerWebSocket.readyState) {
          if (ctx.clientToProxyWebSocket.readyState === WebSocket.CLOSED && ctx.proxyToServerWebSocket.readyState === WebSocket.OPEN) {
