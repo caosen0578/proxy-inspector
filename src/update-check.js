@@ -34,12 +34,21 @@ function currentVersion() {
   return extractVersion(settings.get().appVersion) || PKG_VERSION;
 }
 
-// disableAt → 毫秒时间戳。接受 ISO8601 字符串（如 '2026-07-15T00:00:00+08:00'）或数字(秒/毫秒)。
+// disableAt → 毫秒时间戳。首选「年月日时分秒」字符串（如 '2026-07-15 00:00:00'），
+// 【按本机时区】解读（内网机器同区，后端配的墙上时间即所见）；也兼容数字(秒/毫秒)。
 // 用【绝对时刻】而非"剩余多少秒"——倒计时才不受代理重启影响（每次都拿 now 比它）。无效返回 0。
+// 显式构造本地时间，不用 Date.parse——它对无时区串按本地还是 UTC 各引擎有歧义。
 function parseDisableAt(v) {
   if (v == null || v === '') return 0;
   if (typeof v === 'number') return v > 1e12 ? v : Math.round(v * 1000); // >1e12 视为毫秒，否则按秒
-  const t = Date.parse(String(v));
+  const s = String(v).trim();
+  // 年月日[ 时:分[:秒]]，分隔符 - 或 /，日期与时间间空格或 T；时间省略则当天 00:00:00
+  const m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/.exec(s);
+  if (m) {
+    const d = new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+    return isNaN(d.getTime()) ? 0 : d.getTime();
+  }
+  const t = Date.parse(s); // 兜底：仍接受带时区 ISO 等其它写法
   return Number.isNaN(t) ? 0 : t;
 }
 
