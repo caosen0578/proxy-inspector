@@ -1,8 +1,9 @@
-// 新版本检查：拉取内网 version.json（地址在 settings.updateCheckUrl，仅管理员可改），
+// 新版本检查：请求 settings.updateCheckUrl（仅管理员可改）指向的内网地址——
+// 后端接口或静态 version.json 均可，只要返回一条 JSON 数据：
+//   { "version": "1.2.0", "downloadUrl": "http://.../xxx.zip", "notes": "更新说明" }
 // 与本地 package.json 的 version 比较，供面板横幅通知 + 手动「检查更新」。
-//
-// manifest 格式：{ "version": "1.2.0", "downloadUrl": "http://.../xxx.zip", "notes": "更新说明" }
 // 只通知不自动更新（分发方式是解压覆盖）。拉取失败静默返回 error，不打扰使用。
+// 联调：behavior-validator 提供 GET /api/version/latest 模拟接口（见其 README 用法三）。
 const settings = require('./settings');
 
 const CURRENT = require('../package.json').version;

@@ -384,9 +384,9 @@ tbody td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflo
         <input id="appVersionInput" placeholder="v1.0.0">
         <p style="color:#8b949e;font-size:11px;margin:2px 0 10px">显示在页头中间，保存后立即生效。</p>
 
-        <label>新版本检查地址（version.json）</label>
-        <input id="updateCheckUrlInput" placeholder="http://内网服务器/proxy-inspector/version.json">
-        <p style="color:#8b949e;font-size:11px;margin:2px 0 10px">指向内网 version.json（含 version / downloadUrl / notes）。留空 = 关闭检查。配置后页面每 2 小时自动检查，有新版在页头下方弹通知横幅；页头「检查更新」按钮可手动触发。版本比较基于程序内置版本（package.json），发新版时记得同步更新。</p>
+        <label>新版本检查地址</label>
+        <input id="updateCheckUrlInput" placeholder="http://内网服务器/api/version/latest">
+        <p style="color:#8b949e;font-size:11px;margin:2px 0 10px">指向返回 <code>{version, downloadUrl, notes}</code> JSON 的内网接口（或静态 version.json，均可）。留空 = 关闭检查。配置后页面每 2 小时自动检查，有新版在页头下方弹通知横幅；页头「检查更新」按钮可手动触发。版本比较基于程序内置版本（package.json），发新版时记得同步更新。</p>
 
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
           <div class="toggle" id="lanToggle" onclick="toggleLan()"></div>
