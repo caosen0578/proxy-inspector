@@ -6,14 +6,21 @@
 // 联调：behavior-validator 提供 GET /api/version/latest 模拟接口（见其 README 用法三）。
 const settings = require('./settings');
 
-const CURRENT = require('../package.json').version;
+const PKG_VERSION = require('../package.json').version;
 const CACHE_MS = 10 * 60 * 1000; // 后端缓存 10 分钟：多标签页/频繁刷新不重复外呼（前端自身 2h 轮询）
 let cache = null; // { at, result }
 
-// 语义化版本比较：去掉前导 v，按 . 逐段数值比较；段数不齐按 0 补
+// 从任意版本串里提取「点分数字」段：'版本号：fat001- v1.0.2' → '1.0.2'。提不出返回 ''。
+// 发版习惯是改页头版本号（appVersion 显示串），比较两侧都按此提取，对格式宽容。
+function extractVersion(s) {
+  const m = /(\d+(?:\.\d+)+)/.exec(String(s || ''));
+  return m ? m[1] : '';
+}
+
+// 版本比较：先各自提取点分数字，按 . 逐段【数值】比较（1.0.9 < 1.0.10 正确），段数不齐按 0 补
 function cmpVersion(a, b) {
-  const pa = String(a || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
-  const pb = String(b || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+  const pa = extractVersion(a).split('.').map(n => parseInt(n, 10) || 0);
+  const pb = extractVersion(b).split('.').map(n => parseInt(n, 10) || 0);
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
     const d = (pa[i] || 0) - (pb[i] || 0);
     if (d) return d;
@@ -21,9 +28,16 @@ function cmpVersion(a, b) {
   return 0;
 }
 
+// 本地当前版本：优先取「上送设置」里的版本号显示串（发版时改它即可，与页头一致），
+// 提取不出（如没按 vX.Y.Z 格式填）再退回 package.json 的 version。
+function currentVersion() {
+  return extractVersion(settings.get().appVersion) || PKG_VERSION;
+}
+
 async function check(force) {
   const url = (settings.get().updateCheckUrl || '').trim();
-  if (!url) return { enabled: false, current: CURRENT };
+  const current = currentVersion();
+  if (!url) return { enabled: false, current };
   if (!force && cache && Date.now() - cache.at < CACHE_MS) return cache.result;
 
   let result;
@@ -31,22 +45,22 @@ async function check(force) {
     const res = await fetch(url, { signal: AbortSignal.timeout(10000), redirect: 'follow' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const m = await res.json();
-    if (!m || typeof m.version !== 'string') throw new Error('version.json 缺少 version 字段');
+    if (!m || typeof m.version !== 'string') throw new Error('返回数据缺少 version 字段');
     result = {
       enabled: true,
-      current: CURRENT,
-      latest: m.version,
-      hasUpdate: cmpVersion(m.version, CURRENT) > 0,
+      current,
+      latest: extractVersion(m.version) || m.version, // 展示归一化后的版本（'- v1.0.1' → '1.0.1'）
+      hasUpdate: cmpVersion(m.version, current) > 0,
       downloadUrl: typeof m.downloadUrl === 'string' ? m.downloadUrl : '',
       notes: typeof m.notes === 'string' ? m.notes : '',
       checkedAt: Date.now(),
     };
   } catch (e) {
     // 失败静默：内网服务临时不可达不该打扰使用，横幅不弹；手动检查时前端会把 error 提示出来
-    result = { enabled: true, current: CURRENT, error: e.message, checkedAt: Date.now() };
+    result = { enabled: true, current, error: e.message, checkedAt: Date.now() };
   }
   cache = { at: Date.now(), result };
   return result;
 }
 
-module.exports = { check, CURRENT, cmpVersion };
+module.exports = { check, cmpVersion, extractVersion, currentVersion };

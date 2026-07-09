@@ -194,11 +194,20 @@ tbody td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflo
 /* WS indicator */
 .ws-dot { width: 8px; height: 8px; border-radius: 50%; background: #f85149; flex-shrink: 0; }
 .ws-dot.connected { background: #3fb950; }
+/* 新版本横幅：铃铛脉动 + 下载按钮 */
+@keyframes updBell { 0%,100%{transform:scale(1)} 50%{transform:scale(1.25)} }
+#updateBanner .upd-bell { display:inline-block; animation:updBell 1.2s ease-in-out infinite; margin-right:4px; }
+#updateBanner .upd-dl {
+  display:inline-block; background:#fff; color:#1f6feb; font-weight:700; font-size:13px;
+  padding:3px 14px; border-radius:14px; margin-left:10px; text-decoration:none;
+}
+#updateBanner .upd-dl:hover { background:#ffe08a; color:#7d4e00; }
+#updateBanner .upd-dismiss { color:rgba(255,255,255,.75); margin-left:14px; font-weight:400; font-size:12px; text-decoration:underline; }
 </style>
 </head>
 <body>
 <div id="lanBanner" style="display:none;background:#7d1a1a;color:#ffd7d7;font-size:13px;text-align:center;padding:6px 12px;font-weight:600"></div>
-<div id="updateBanner" style="display:none;background:#0d3a58;color:#bfe3ff;font-size:13px;text-align:center;padding:6px 12px;font-weight:600"></div>
+<div id="updateBanner" style="display:none;background:linear-gradient(90deg,#1f6feb,#388bfd);color:#fff;font-size:14px;text-align:center;padding:10px 14px;font-weight:700;box-shadow:0 2px 8px rgba(31,111,235,.45)"></div>
 <header>
   <h1 id="appTitleH1">⚡ 资金同业代码解析工具</h1>
   <div class="badge">代理端口 <span id="proxyPort">-</span></div>
@@ -386,7 +395,7 @@ tbody td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflo
 
         <label>新版本检查地址</label>
         <input id="updateCheckUrlInput" placeholder="http://内网服务器/api/version/latest">
-        <p style="color:#8b949e;font-size:11px;margin:2px 0 10px">指向返回 <code>{version, downloadUrl, notes}</code> JSON 的内网接口（或静态 version.json，均可）。留空 = 关闭检查。配置后页面每 2 小时自动检查，有新版在页头下方弹通知横幅；页头「检查更新」按钮可手动触发。版本比较基于程序内置版本（package.json），发新版时记得同步更新。</p>
+        <p style="color:#8b949e;font-size:11px;margin:2px 0 10px">指向返回 <code>{version, downloadUrl, notes}</code> JSON 的内网接口（或静态 version.json，均可）。留空 = 关闭检查。配置后页面每 2 小时自动检查，有新版在页头下方弹通知横幅；页头「检查更新」按钮可手动触发。版本比较基于上面「版本号」里的数字段（如 <code>fat001- v1.0.2</code> 取 <code>1.0.2</code>，末位累加可正确比较），提取不出才退回程序内置版本。</p>
 
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
           <div class="toggle" id="lanToggle" onclick="toggleLan()"></div>
@@ -1514,15 +1523,18 @@ function renderUpdateBanner(u) {
   if (!u || !u.hasUpdate) { b.style.display = 'none'; return; }
   b.textContent = '';
   // DOM API 组装（manifest 内容不进 innerHTML，天然免注入）
-  b.append('🔔 新版本 v' + u.latest + ' 已发布（当前 v' + u.current + '）' + (u.notes ? '：' + u.notes : '') + ' ');
+  const bell = document.createElement('span');
+  bell.className = 'upd-bell'; bell.textContent = '🔔';
+  b.append(bell);
+  b.append('发现新版本 v' + u.latest + '（当前 v' + u.current + '）' + (u.notes ? '：' + u.notes : ''));
   if (u.downloadUrl) {
     const a = document.createElement('a');
     a.href = u.downloadUrl; a.target = '_blank'; a.rel = 'noopener';
-    a.style.color = '#58a6ff'; a.textContent = '下载新版';
+    a.className = 'upd-dl'; a.textContent = '⬇ 下载新版';
     b.append(a);
   }
   const d = document.createElement('a');
-  d.href = 'javascript:void(0)'; d.style.color = '#8b949e'; d.style.marginLeft = '10px';
+  d.href = 'javascript:void(0)'; d.className = 'upd-dismiss';
   d.textContent = '本版本不再提醒';
   d.onclick = () => dismissUpdate(u.latest);
   b.append(d);
