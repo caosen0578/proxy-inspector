@@ -34,16 +34,34 @@ function currentVersion() {
   return extractVersion(settings.get().appVersion) || PKG_VERSION;
 }
 
-// 版本停用状态（供 proxy 每请求查询，纯内存布尔）。
-// 仅在「成功拿到检查结果」时更新；检查失败保持上一次状态——服务临时不可达不误伤（fail-open）。
-let disabledState = { disabled: false, minVersion: '', downloadUrl: '' };
-function isDisabled() { return disabledState.disabled; }
-function disabledInfo() { return { ...disabledState }; }
+// disableAt → 毫秒时间戳。接受 ISO8601 字符串（如 '2026-07-15T00:00:00+08:00'）或数字(秒/毫秒)。
+// 用【绝对时刻】而非"剩余多少秒"——倒计时才不受代理重启影响（每次都拿 now 比它）。无效返回 0。
+function parseDisableAt(v) {
+  if (v == null || v === '') return 0;
+  if (typeof v === 'number') return v > 1e12 ? v : Math.round(v * 1000); // >1e12 视为毫秒，否则按秒
+  const t = Date.parse(String(v));
+  return Number.isNaN(t) ? 0 : t;
+}
+
+// 版本停用管控状态（供 proxy 每请求实时查询）。仅「成功拿到检查结果」时更新；
+// 失败保持上一次状态（fail-open，服务不可达不误伤）。
+//   managed     本地版本是否受管控（低于 minVersion）
+//   disableAtMs 绝对停用时刻(ms)；0 = 无宽限期（managed 时立即停用）；>0 = 到点才停用（之前倒计时）
+let disabledState = { managed: false, minVersion: '', downloadUrl: '', disableAtMs: 0 };
+// 「当前是否已停用」：受管控且（无宽限期 或 已过停用时刻）。每次实时比 now——
+// 倒计时到点无需重新 check、也不受重启影响即自动生效。
+function isDisabled() {
+  const s = disabledState;
+  if (!s.managed) return false;
+  if (!s.disableAtMs) return true;
+  return Date.now() >= s.disableAtMs;
+}
+function disabledInfo() { return { ...disabledState, disabled: isDisabled() }; }
 
 async function check(force) {
   const url = (settings.get().updateCheckUrl || '').trim();
   const current = currentVersion();
-  if (!url) { disabledState = { disabled: false, minVersion: '', downloadUrl: '' }; return { enabled: false, current }; }
+  if (!url) { disabledState = { managed: false, minVersion: '', downloadUrl: '', disableAtMs: 0 }; return { enabled: false, current }; }
   if (!force && cache && Date.now() - cache.at < CACHE_MS) return cache.result;
 
   let result;
@@ -52,26 +70,35 @@ async function check(force) {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const m = await res.json();
     if (!m || typeof m.version !== 'string') throw new Error('返回数据缺少 version 字段');
-    // minVersion（可选）：低于此版本 → 本版本停用（代理拦新请求，上送队列不受影响）
+    // minVersion（可选）：本地低于此版本 → 本版本"受管控"。
+    // disableAt（可选，绝对时刻 ISO/时间戳）：受管控时到此刻才真正停用，之前只倒计时提醒；
+    //   不下发 disableAt → 立即停用（旧行为）。绝对时刻 → 倒计时不受重启影响。
     const minVersion = typeof m.minVersion === 'string' ? (extractVersion(m.minVersion) || '') : '';
-    const disabled = !!minVersion && cmpVersion(current, minVersion) < 0;
+    const managed = !!minVersion && cmpVersion(current, minVersion) < 0;
+    const disableAtMs = managed ? parseDisableAt(m.disableAt) : 0;
     const downloadUrl = typeof m.downloadUrl === 'string' ? m.downloadUrl : '';
-    disabledState = { disabled, minVersion, downloadUrl };
+    disabledState = { managed, minVersion, downloadUrl, disableAtMs };
     result = {
       enabled: true,
       current,
       latest: extractVersion(m.version) || m.version, // 展示归一化后的版本（'- v1.0.1' → '1.0.1'）
       hasUpdate: cmpVersion(m.version, current) > 0,
       minVersion,
-      disabled,
+      managed,
+      disableAt: disableAtMs,   // 绝对停用时刻(ms)，0 = 无（立即停用或不管控）
+      disabled: isDisabled(),   // 当前是否已停用（倒计时到点即 true）
       downloadUrl,
       notes: typeof m.notes === 'string' ? m.notes : '',
       checkedAt: Date.now(),
     };
   } catch (e) {
     // 失败静默：内网服务临时不可达不该打扰使用，横幅不弹；手动检查时前端会把 error 提示出来。
-    // disabledState 保持上一次成功结果（fail-open：从未成功过 = 不停用）。
-    result = { enabled: true, current, disabled: disabledState.disabled, error: e.message, checkedAt: Date.now() };
+    // disabledState 保持上一次成功结果（fail-open：从未成功过 = 不管控）。
+    result = {
+      enabled: true, current, error: e.message, checkedAt: Date.now(),
+      minVersion: disabledState.minVersion, managed: disabledState.managed,
+      disableAt: disabledState.disableAtMs, disabled: isDisabled(), downloadUrl: disabledState.downloadUrl,
+    };
   }
   cache = { at: Date.now(), result };
   return result;

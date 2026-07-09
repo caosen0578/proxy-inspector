@@ -1518,22 +1518,49 @@ function toggleLan() {
 // 自动：页面加载时查一次 + 每 2 小时轮询（走后端 /api/update/check，后端有 10 分钟缓存）。
 // 「不再提醒」按版本号记 localStorage——出了更新的版本会重新弹。手动检查无视该标记并强制刷新。
 const UPD_DISMISS_KEY = 'updDismissVersion';
+let _updCountdownTimer = null;
+function clearUpdCountdown() { if (_updCountdownTimer) { clearInterval(_updCountdownTimer); _updCountdownTimer = null; } }
+// 停用绝对时刻(ms) → 本地日期串（用浏览器本地时区显示，后端下发的是带时区的绝对时刻）
+function fmtDisableAt(ms) {
+  const d = new Date(ms), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+// 剩余毫秒 → 倒计时串。天级只到分，时级到秒，最后一小时到秒。
+function fmtRemain(ms) {
+  if (ms < 0) ms = 0;
+  const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600),
+        m = Math.floor(s % 3600 / 60), sec = s % 60;
+  if (d > 0) return `${d} 天 ${h} 时 ${m} 分`;
+  if (h > 0) return `${h} 时 ${m} 分 ${sec} 秒`;
+  return `${m} 分 ${sec} 秒`;
+}
+// 三态优先级：已停用(红,不可关) > 停用倒计时(橙,不可关) > 有新版(蓝,可按版本关)
 function renderUpdateBanner(u) {
   const b = document.getElementById('updateBanner');
-  if (!u || (!u.hasUpdate && !u.disabled)) { b.style.display = 'none'; return; }
+  clearUpdCountdown();
+  const counting = !!u && u.managed && !u.disabled && u.disableAt > 0;
+  if (!u || (!u.hasUpdate && !u.disabled && !counting)) { b.style.display = 'none'; return; }
   b.textContent = '';
-  // 停用态：红色、不可关闭（无「不再提醒」）；升级提醒态：蓝色、可按版本关闭
-  b.style.background = u.disabled
-    ? 'linear-gradient(90deg,#b62324,#da3633)'
-    : 'linear-gradient(90deg,#1f6feb,#388bfd)';
-  b.style.boxShadow = u.disabled ? '0 2px 8px rgba(218,54,51,.5)' : '0 2px 8px rgba(31,111,235,.45)';
-  // DOM API 组装（manifest 内容不进 innerHTML，天然免注入）
+  const style = u.disabled
+    ? ['linear-gradient(90deg,#b62324,#da3633)', '0 2px 8px rgba(218,54,51,.5)', '⛔']
+    : counting
+      ? ['linear-gradient(90deg,#b7791f,#d29922)', '0 2px 8px rgba(210,153,34,.5)', '⏳']
+      : ['linear-gradient(90deg,#1f6feb,#388bfd)', '0 2px 8px rgba(31,111,235,.45)', '🔔'];
+  b.style.background = style[0]; b.style.boxShadow = style[1];
+  // DOM API 组装（后端返回内容不进 innerHTML，天然免注入）
   const bell = document.createElement('span');
-  bell.className = 'upd-bell'; bell.textContent = u.disabled ? '⛔' : '🔔';
+  bell.className = 'upd-bell'; bell.textContent = style[2];
   b.append(bell);
   if (u.disabled) {
     b.append('当前版本 v' + u.current + ' 已停用（最低要求 v' + u.minVersion + '），代理已暂停转发新请求，请立即升级并重启'
       + (u.notes ? '：' + u.notes : ''));
+  } else if (counting) {
+    b.append('当前版本 v' + u.current + ' 将于 ' + fmtDisableAt(u.disableAt) + ' 停用，剩 ');
+    const cd = document.createElement('span');
+    cd.id = 'updCountdown';
+    cd.style.cssText = 'font-weight:800;background:rgba(0,0,0,.22);padding:1px 7px;border-radius:4px;font-variant-numeric:tabular-nums';
+    b.append(cd);
+    b.append('，请尽快升级' + (u.notes ? '：' + u.notes : ''));
   } else {
     b.append('发现新版本 v' + u.latest + '（当前 v' + u.current + '）' + (u.notes ? '：' + u.notes : ''));
   }
@@ -1543,7 +1570,7 @@ function renderUpdateBanner(u) {
     a.className = 'upd-dl'; a.textContent = '⬇ 下载新版';
     b.append(a);
   }
-  if (!u.disabled) {
+  if (!u.disabled && !counting) { // 只有普通更新可关闭；停用/倒计时不可关闭
     const d = document.createElement('a');
     d.href = 'javascript:void(0)'; d.className = 'upd-dismiss';
     d.textContent = '本版本不再提醒';
@@ -1551,6 +1578,16 @@ function renderUpdateBanner(u) {
     b.append(d);
   }
   b.style.display = '';
+  if (counting) {
+    const tick = () => {
+      const remain = u.disableAt - Date.now();
+      if (remain <= 0) { clearUpdCountdown(); u.disabled = true; renderUpdateBanner(u); return; } // 到点→切停用横幅（代理端同刻已实时停用）
+      const cd = document.getElementById('updCountdown');
+      if (cd) cd.textContent = fmtRemain(remain);
+    };
+    tick();
+    _updCountdownTimer = setInterval(tick, 1000);
+  }
 }
 function dismissUpdate(version) {
   localStorage.setItem(UPD_DISMISS_KEY, version);
@@ -1560,7 +1597,8 @@ async function checkUpdate(force, manual) {
   let u;
   try { u = await fetch('/api/update/check' + (force ? '?force=1' : '')).then(x => x.json()); }
   catch { if (manual) showToast('检查更新失败：网络错误'); return; }
-  if (u.disabled) { renderUpdateBanner(u); return; } // 停用态：无视"不再提醒"，必弹红色横幅
+  // 停用 / 停用倒计时：强制显示，无视"不再提醒"
+  if (u.disabled || (u.managed && u.disableAt > 0)) { renderUpdateBanner(u); return; }
   if (manual) {
     if (!u.enabled) { showToast('未配置检查地址（管理员在「上送设置」填写检查接口地址）'); return; }
     if (u.error) { showToast('检查更新失败：' + u.error); return; }
@@ -1569,7 +1607,7 @@ async function checkUpdate(force, manual) {
     return;
   }
   if (u.hasUpdate && localStorage.getItem(UPD_DISMISS_KEY) !== u.latest) renderUpdateBanner(u);
-  else if (!u.hasUpdate) renderUpdateBanner(u); // 解除停用/已升级后隐藏横幅
+  else if (!u.hasUpdate) renderUpdateBanner(u); // 解除管控/已升级后隐藏横幅
 }
 function manualCheckUpdate() { checkUpdate(true, true); }
 checkUpdate(false, false);
