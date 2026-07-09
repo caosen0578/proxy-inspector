@@ -51,15 +51,20 @@ function sseUsage(raw, field) {
   return null;
 }
 
-// 从 markdown 文本中提取 ``` 围栏代码块的代码（去掉语言标记与围栏本身）。
-// 多个代码块用空行拼接；若没有任何围栏代码块，返回原文（避免纯文字回复被清空）。
-function extractCodeBlocks(text) {
-  if (typeof text !== 'string' || !text) return '';
+// 返回文本里所有 ``` 围栏代码块（去掉语言标记与围栏本身）的数组；无则空数组。
+function codeBlocksOf(text) {
+  if (typeof text !== 'string' || !text) return [];
   const re = /```[^\n`]*\n?([\s\S]*?)```/g;
   const blocks = [];
   let m;
   while ((m = re.exec(text))) blocks.push(m[1].replace(/\s+$/, ''));
-  return blocks.length ? blocks.join('\n\n') : text;
+  return blocks;
+}
+// 从 markdown 文本中提取 ``` 围栏代码块的代码（去掉语言标记与围栏本身）。
+// 多个代码块用空行拼接；若没有任何围栏代码块，返回原文（避免纯文字回复被清空）。
+function extractCodeBlocks(text) {
+  const blocks = codeBlocksOf(text);
+  return blocks.length ? blocks.join('\n\n') : (typeof text === 'string' ? text : '');
 }
 
 // SSE 拼接正文（content 对话 / text 补全），module 级供多处复用
@@ -104,7 +109,10 @@ function splitJsonObjects(s) {
 // 两半都不是合法 JSON 而全部丢失。因此这里【完全不依赖 id/name/index】：
 // 把所有 arguments 分片按出现顺序全量拼接，再用括号配平切出每个完整 JSON 对象。
 // 这样无论同一调用被拆几段、还是多个真实调用首尾相接（{...}{...}），都能正确还原。
-function toolCallsCode(raw) {
+// 返回本轮工具写入的文件数组 [{ filePath, code }]（按出现顺序、按 code 去重）。
+// 写码工具实测为 write_to_file(字段 content) 与 replace_in_file(字段 new_str)；
+// filePath 兼容多种命名。code 字段优先级 new_str→content→code→newText。
+function toolCallsWrites(raw) {
   let buf = '';
   for (const c of parseSSE(raw)) {
     const ch = c.choices && c.choices[0];
@@ -125,9 +133,15 @@ function toolCallsCode(raw) {
     // 切出两个内容相同的 JSON 对象。按 code 文本去重，避免上送重复代码、虚高代码量。
     if (seen.has(code)) continue;
     seen.add(code);
-    out.push(code);
+    const fp = obj.filePath ?? obj.file_path ?? obj.target_file ?? obj.path;
+    out.push({ filePath: typeof fp === 'string' ? fp : '', code });
   }
-  return out.join('\n\n');
+  return out;
+}
+
+// 仅取工具写入的代码（拼接），供 acceptResult 的代码统计用。
+function toolCallsCode(raw) {
+  return toolCallsWrites(raw).map(w => w.code).join('\n\n');
 }
 
 // 是否为补全接口 /v2/completions 的响应：chunk 用 choices[0].text（裸代码、无围栏）；
@@ -148,12 +162,38 @@ function isCompletionStyle(raw) {
 //   3) 代码补全：choices[0].text 全量（裸代码、无围栏）—— 全文即写入代码
 // 对话纯文字（无围栏、无工具）返回空，不计入代码统计。
 function extractGeneratedCode(raw) {
-  const tool = toolCallsCode(raw);
-  if (tool) return tool;
+  const seen = new Set();
+  const parts = [];
+  const add = (code) => {
+    if (typeof code !== 'string' || !code || seen.has(code)) return;
+    seen.add(code); parts.push(code);
+  };
+  // 1) 工具写入代码（write_to_file/replace_in_file）
+  for (const w of toolCallsWrites(raw)) add(w.code);
+  // 2) 旁白里的围栏代码块 —— 即使有工具代码也并入（原先在此短路，会丢同轮旁白里贴的代码）。
+  //    按 code 文本去重，避免"模型先贴预览再写文件"造成重复。
   const content = sseJoinContent(raw);
-  if (/```/.test(content)) return extractCodeBlocks(content);
-  if (isCompletionStyle(raw)) return content; // 补全裸代码
-  return '';
+  const blocks = codeBlocksOf(content);
+  if (blocks.length) blocks.forEach(add);
+  else if (!parts.length && isCompletionStyle(raw)) add(content); // 补全裸代码（无工具、无围栏时）
+  return parts.join('\n\n');
+}
+
+// result 用「完整回复」：模型旁白 + 每次文件写入以 ``` 围栏嵌入（上方标 filePath）。
+// 这样 result 内容完整可读，且 acceptResult 里的代码正是 result 中围栏块的内容，口径一致。
+// 纯聊天/补全（无工具写入）时与旧 sseContent 完全一致，不改变既有行为。
+function sseFullReply(raw) {
+  const narration = sseJoinContent(raw);
+  const writes = toolCallsWrites(raw);
+  if (!writes.length) return narration;
+  const parts = [];
+  const head = narration.replace(/\s+$/, '');
+  if (head) parts.push(head);
+  for (const w of writes) {
+    const header = w.filePath ? '文件 `' + w.filePath + '`：' : '文件（未命名）：';
+    parts.push(header + '\n```\n' + w.code.replace(/\s+$/, '') + '\n```');
+  }
+  return parts.join('\n\n');
 }
 
 // messages 数组 → 拼接文本（"role: content"，逐条换行）
@@ -190,6 +230,8 @@ const TRANSFORMS = {
   // —— SSE 流式响应（作用于原始响应文本，配合 source:'resText'）——
   // 同时兼容对话格式（choices[].delta.content）与补全格式（choices[].text）
   sseContent(raw) { return sseJoinContent(raw); },
+  // 完整回复：旁白 + 工具写入的文件（带 filePath 的围栏块）。给 result 用。
+  sseFullReply(raw) { return sseFullReply(raw); },
   sseModel(raw) { const c = parseSSE(raw)[0]; return c ? (c.model ?? null) : null; },
   sseFinishReason(raw) {
     const cs = parseSSE(raw);
@@ -218,6 +260,9 @@ const TRANSFORMS = {
     const code = extractGeneratedCode(raw);
     return code ? Buffer.byteLength(code, 'utf8') : 0;
   },
+  // 任意字符串的行数 / UTF-8 字节数（配合 source:'field' 对已解析字段取值计数，如按 acceptResult 算）
+  lineCount(v) { return v ? String(v).split('\n').length : 0; },
+  byteSize(v)  { return v ? Buffer.byteLength(String(v), 'utf8') : 0; },
 };
 
 // 默认映射 —— 用户行为埋点接口 v1.0 saveRecord 字段
@@ -229,11 +274,9 @@ const DEFAULT_MAPPING = {
   sessionId:          { source: 'record', path: 'requestHeaders.x-conversation-id' },
   requestId:          { source: 'record', path: 'requestHeaders.x-conversation-message-id' },
   type:               { source: 'const',  value: 'CODE_CHAT' },
-  result:             { source: 'resText', transform: 'sseContent' },  // 模型返回 SSE 解析后的全部内容
-  acceptResult:       { source: 'resText', transform: 'sseCodeAll' },  // AI 实际产出代码（extractGeneratedCode 三级优先）
+  result:             { source: 'resText', transform: 'sseFullReply' }, // 完整回复：旁白 + 工具写入的文件(围栏块)
+  acceptResult:       { source: 'resText', transform: 'sseCodeAll' },  // AI 实际产出代码（与 result 中围栏块同源）
   prompt:             { source: 'reqText', transform: 'promptAny' }, // 对话 messages / 补全 prompt 都兼容
-  promptSize:         { source: 'reqText', transform: 'promptSize' },
-  promptMd5:          { source: 'reqText', transform: 'promptMd5' },
   scope:              { source: 'record', path: 'requestHeaders.x-ide-type' },
   isStatistics:       { source: 'const',  value: 1 },
   modelName:          { source: 'resText', transform: 'sseModel' },
@@ -247,9 +290,16 @@ const DEFAULT_MAPPING = {
   triggerType:        { source: 'const',  value: 'auto' },
   apiUrl:             { source: 'record', path: 'url' },
   finishReason:       { source: 'resText', transform: 'sseFinishReason' },
-  // 生成代码量统计（与 acceptResult 同源，按 AI 实际产出代码计算）
+  // ⚠️ 整数字段必须带数值 transform，否则会把原始响应文本(字符串)发给接口的 Integer 字段
+  //    → 接口报 "Cannot deserialize Integer from String"。切勿手动映射成裸 resText！
+  promptSize:         { source: 'reqText', transform: 'promptSize' },
+  promptMd5:          { source: 'reqText', transform: 'promptMd5' },
   codeLines:          { source: 'resText', transform: 'sseCodeLines' },
   codeSize:           { source: 'resText', transform: 'sseCodeSize' },
+  // acceptCodeLines/acceptCodeSize：接口文档标"否"但后端实际按必填校验。被动代理拿不到
+  // "用户真实采纳量"，按 acceptResult 的取值直接计数（source:'field'）——acceptResult 若被改映射，这俩自动跟随。
+  acceptCodeLines:    { source: 'field', path: 'acceptResult', transform: 'lineCount' },
+  acceptCodeSize:     { source: 'field', path: 'acceptResult', transform: 'byteSize' },
   // 补全接口上下文（来自请求体 extra.*，对话接口无则降级 null）
   language:           { source: 'req',    path: 'extra.language' },
   filePath:           { source: 'req',    path: 'extra.file_name' },
@@ -270,6 +320,7 @@ function resolveField(spec, ctx) {
     case 'reqText': value = ctx.reqText; break; // 原始请求文本（配合 transform）
     case 'resText': value = ctx.resText; break; // 原始响应文本（SSE 等非 JSON 用）
     case 'record': value = getByPath(ctx.record, spec.path); break;
+    case 'field':  value = getByPath(ctx.out, spec.path); break; // 引用同一条已解析出的目标字段（如 acceptResult）
     default:       value = undefined;
   }
   if (spec.transform && TRANSFORMS[spec.transform]) {
@@ -287,6 +338,7 @@ function resolveField(spec, ctx) {
  */
 function toSaveRecord(record, opts = {}) {
   const mapping = (opts.mapping && Object.keys(opts.mapping).length) ? opts.mapping : DEFAULT_MAPPING;
+  const out = {};
   const ctx = {
     req: safeParse(record.requestBody) || {},
     res: safeParse(record.responseBody) || {},
@@ -294,8 +346,8 @@ function toSaveRecord(record, opts = {}) {
     resText: record.responseBody || '',
     record,
     config: opts.config || {},
+    out, // 供 source:'field' 引用已解析字段——依赖字段（如 acceptResult）须在映射里排在引用者之前
   };
-  const out = {};
   for (const [field, spec] of Object.entries(mapping)) {
     out[field] = resolveField(spec, ctx);
   }

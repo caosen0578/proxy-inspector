@@ -197,6 +197,7 @@ tbody td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflo
 </style>
 </head>
 <body>
+<div id="lanBanner" style="display:none;background:#7d1a1a;color:#ffd7d7;font-size:13px;text-align:center;padding:6px 12px;font-weight:600"></div>
 <header>
   <h1 id="appTitleH1">⚡ 资金同业代码解析工具</h1>
   <div class="badge">代理端口 <span id="proxyPort">-</span></div>
@@ -382,6 +383,19 @@ tbody td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflo
         <p style="color:#8b949e;font-size:11px;margin:2px 0 10px">显示在页头中间，保存后立即生效。</p>
 
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+          <div class="toggle" id="lanToggle" onclick="toggleLan()"></div>
+          <span id="lanToggleLabel" style="font-size:13px;color:#c9d1d9">局域网访问：关闭</span>
+        </div>
+        <p style="color:#f85149;font-size:11px;margin:2px 0 10px">⚠ 开启后局域网其他机器可访问本机面板/代理（含抓到的代码、令牌），代理会变开放代理。仅临时需要时开，用完请关。<b>保存后需重启工具才生效。</b></p>
+
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+          <div class="toggle" id="debugLogToggle" onclick="toggleDebugLog()"></div>
+          <span id="debugLogToggleLabel" style="font-size:13px;color:#c9d1d9">调试落盘(JSONL)：关闭</span>
+          <button type="button" onclick="downloadDebugLog()" style="margin-left:auto;font-size:12px;padding:3px 10px">下载 JSONL</button>
+        </div>
+        <p style="color:#8b949e;font-size:11px;margin:2px 0 10px">开启后，每条<b>需要上送的记录</b>会同步追加到本地 <code>upload-debug-log.jsonl</code>（每行一条 JSON，字段：time / id / requestId / prompt / result / acceptResult / requestRaw / responseRaw；<code>id</code> 与抓包页记录 id 对应，可 grep/jq 搜索）。<span style="color:#f85149">⚠ 会把 prompt 与产出代码明文写盘，仅本机排查用，用完请关。保存后生效。</span></p>
+
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
           <div class="toggle" id="reportToggle" onclick="toggleReporter()"></div>
           <span id="reportToggleLabel" style="font-size:13px;color:#c9d1d9">报文上送：关闭</span>
         </div>
@@ -395,9 +409,9 @@ tbody td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflo
 
         <!-- behavior 模式：埋点平台 -->
         <div id="behaviorFields">
-          <label>埋点平台 BaseURL</label>
-          <input id="reportBaseUrl" placeholder="http://appdes.fat.qa.pab.com.cn">
-          <p style="color:#8b949e;font-size:11px;margin:2px 0 0">实际上送地址 = BaseURL + <code>/api/userBehavior/saveRecord</code></p>
+          <label>埋点平台 BaseURL（含 /api 前缀）</label>
+          <input id="reportBaseUrl" placeholder="http://appdes.fat.qa.pab.com.cn/api">
+          <p style="color:#8b949e;font-size:11px;margin:2px 0 0">实际上送地址 = BaseURL + <code>/userBehavior/saveRecord</code>。<b>BaseURL 末尾要带 <code>/api</code></b>（各环境网关前缀自行配），如 <code>http://xxx.com.cn/api</code></p>
           <label>apiToken（鉴权头）</label>
           <input id="reportToken" placeholder="向 ex-pengqisheng835 申请">
           <label>pluginVersion 默认值（triggerVersion）</label>
@@ -422,11 +436,17 @@ tbody td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflo
           匹配的请求走<b>快速通道</b>：不强制 gzip、关闭 Nagle、转发零处理，尽量不破坏 IDE 的行内代码补全回写。<b>采集与上送照常</b>。默认 <code>*/completions*</code>（覆盖代码补全/对话两个接口）。
         </p>
 
+        <label style="margin-top:10px">上送超时（毫秒）</label>
+        <input id="reportTimeoutMs" type="number" min="1000" max="120000" step="500" placeholder="15000">
+        <p style="color:#8b949e;font-size:11px;margin-top:4px">
+          单次上送等待后端响应的最长时间。<b>须大于上送后端的最坏响应时间</b>，否则后端「慢成功」时会先超时、误判失败而重发 → 重复上送。范围 1000~120000，越界自动夹取；默认 15000。
+        </p>
+
         <div class="form-actions">
           <button class="btn-primary" onclick="saveReportSettings()">保存设置</button>
           <span id="reportSaved" style="color:#3fb950;font-size:12px;align-self:center;display:none">✓ 已保存</span>
         </div>
-        <p style="color:#8b949e;font-size:11px;margin-top:8px">字段映射在「字段映射」标签页配置；本页只配上送目标与鉴权。</p>
+        <p style="color:#8b949e;font-size:11px;margin-top:8px">字段映射在「字段映射」标签页配置；本页只配上送目标与鉴权。上送设置均需管理员权限保存。</p>
       </div>
     </div>
 
@@ -1370,6 +1390,17 @@ async function updateCounts() {
   if (!s.reporterEnabled) rs.textContent = '关';
   else rs.textContent = s.reporterFilterCount ? `开·${s.reporterFilterCount}条过滤` : '开·全部';
   rs.style.color = s.reporterEnabled ? '#3fb950' : '#8b949e';
+  // 局域网访问横幅：实际已暴露 → 红条警告；仅保存未重启 → 提示重启生效
+  const lb = document.getElementById('lanBanner');
+  if (s.lanExposed) {
+    lb.textContent = '⚠ 局域网访问已开启：本机面板与代理已暴露给局域网其他机器（含抓到的代码/令牌）。用完请关闭并重启。';
+    lb.style.display = '';
+  } else if (s.lanAccess) {
+    lb.textContent = '① 局域网访问已保存但尚未生效 —— 重启本工具后对局域网开放。';
+    lb.style.display = '';
+  } else {
+    lb.style.display = 'none';
+  }
 }
 
 // ── 上送设置 ───────────────────────────────────────────
@@ -1390,6 +1421,10 @@ async function loadReportSettings() {
   const s = await fetch('/api/settings').then(x => x.json());
   reportEnabled = !!s.reporterEnabled;
   renderReportToggle();
+  lanEnabled = !!s.lanAccess;
+  renderLanToggle();
+  debugLogEnabled = !!s.debugLogEnabled;
+  renderDebugLogToggle();
   document.getElementById('appTitleInput').value = s.appTitle || '';
   applyAppTitle(s.appTitle);
   document.getElementById('appVersionInput').value = s.appVersion || '';
@@ -1401,6 +1436,7 @@ async function loadReportSettings() {
   document.getElementById('reportUrl').value = s.reporterUrl || '';
   document.getElementById('reportFilters').value = (s.reporterFilters || []).join('\n');
   document.getElementById('reportPassthrough').value = (s.streamPassthrough || []).join('\n');
+  document.getElementById('reportTimeoutMs').value = s.reporterTimeoutMs != null ? s.reporterTimeoutMs : '';
   onReportFormatChange();
 }
 function onReportFormatChange() {
@@ -1446,10 +1482,62 @@ function toggleReporter() {
   renderReportToggle();
 }
 
+// 局域网访问开关（仅管理员，随「保存设置」持久化，重启生效）
+let lanEnabled = false;
+function renderLanToggle() {
+  const t = document.getElementById('lanToggle');
+  if (!t) return;
+  t.classList.toggle('on', lanEnabled);
+  document.getElementById('lanToggleLabel').textContent = '局域网访问：' + (lanEnabled ? '开启（重启后生效）' : '关闭');
+}
+function toggleLan() {
+  lanEnabled = !lanEnabled;
+  if (lanEnabled && !confirm('确认开启局域网访问？\n开启后局域网其他机器可访问本机面板与代理（含抓到的代码、令牌），代理会变开放代理。\n仅在临时需要时开，用完请关闭。保存后需重启工具才生效。')) {
+    lanEnabled = false; return;
+  }
+  renderLanToggle();
+}
+
+// 调试落盘(JSONL)开关（仅管理员，随「保存设置」持久化，保存后即生效）
+let debugLogEnabled = false;
+function renderDebugLogToggle() {
+  const t = document.getElementById('debugLogToggle');
+  if (!t) return;
+  t.classList.toggle('on', debugLogEnabled);
+  document.getElementById('debugLogToggleLabel').textContent = '调试落盘(JSONL)：' + (debugLogEnabled ? '开启' : '关闭');
+}
+function toggleDebugLog() {
+  debugLogEnabled = !debugLogEnabled;
+  if (debugLogEnabled && !confirm('确认开启调试落盘？\n每条需要上送的记录会把 prompt、产出代码、请求报文明文追加到本机 upload-debug-log.jsonl。\n仅本机排查用，用完请关。')) {
+    debugLogEnabled = false; return;
+  }
+  renderDebugLogToggle();
+}
+// 下载 JSONL：管理员会话头由 window.fetch 拦截自动带上；404=尚无记录
+async function downloadDebugLog() {
+  let res;
+  try { res = await fetch('/api/debug/log'); }
+  catch { showToast('下载失败：网络错误'); return; }
+  if (!res.ok) {
+    if (res.status === 404) showToast('暂无调试记录（未开启，或还没有需要上送的记录）');
+    else if (res.status === 403) showToast('需要管理员权限');
+    else showToast('下载失败：' + res.status);
+    return;
+  }
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'upload-debug-log.jsonl';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
 async function saveReportSettings() {
   const body = {
     appTitle: document.getElementById('appTitleInput').value,
     appVersion: document.getElementById('appVersionInput').value,
+    lanAccess: lanEnabled,
+    debugLogEnabled: debugLogEnabled,
     reporterEnabled: reportEnabled,
     reporterFormat: document.getElementById('reportFormat').value,
     reporterBaseUrl: document.getElementById('reportBaseUrl').value,
@@ -1458,6 +1546,7 @@ async function saveReportSettings() {
     reporterUrl: document.getElementById('reportUrl').value,
     reporterFilters: document.getElementById('reportFilters').value,
     streamPassthrough: document.getElementById('reportPassthrough').value,
+    reporterTimeoutMs: document.getElementById('reportTimeoutMs').value,
   };
   let res;
   try {
@@ -1477,10 +1566,10 @@ async function saveReportSettings() {
 }
 
 // ── 字段映射（按上送目标接口 + 文档 schema 驱动）─────────
-const MAP_SOURCES = ['','um','const','uuid','config','req','res','reqText','resText','record']; // '' = 不映射
-const SOURCE_LABEL = { '':'— 不映射', um:'UM号(系统用户名)', const:'const 固定值', uuid:'uuid', config:'config 配置项', req:'req 请求体', res:'res 响应体', reqText:'reqText 请求原文', resText:'resText 响应原文', record:'record 元数据' };
-const MAP_TRANSFORMS = ['','joinMessages','promptAny','promptSize','promptMd5','isoDate','string','number','sseContent','sseCode','sseToolCode','sseCodeAll','extractCode','sseModel','sseFinishReason','ssePromptTokens','sseCompletionTokens','sseTotalTokens'];
-const ARG_HINT = { '':'(不映射)', um:'(自动取右上角 UM 号)', const:'固定值', config:'配置键，如 reporterTriggerVersion', req:'请求体路径，如 model', res:'响应体路径，如 choices.0.message.content', record:'元数据，如 statusCode / requestHeaders.x-user-id', uuid:'(无需填)', reqText:'(整段请求文本)', resText:'(整段响应文本)' };
+const MAP_SOURCES = ['','um','const','uuid','config','req','res','reqText','resText','record','field']; // '' = 不映射
+const SOURCE_LABEL = { '':'— 不映射', um:'UM号(系统用户名)', const:'const 固定值', uuid:'uuid', config:'config 配置项', req:'req 请求体', res:'res 响应体', reqText:'reqText 请求原文', resText:'resText 响应原文', record:'record 元数据', field:'field 引用本条已解析字段' };
+const MAP_TRANSFORMS = ['','joinMessages','promptAny','promptSize','promptMd5','isoDate','string','number','sseContent','sseCode','sseToolCode','sseCodeAll','sseCodeLines','sseCodeSize','lineCount','byteSize','extractCode','sseModel','sseFinishReason','ssePromptTokens','sseCompletionTokens','sseTotalTokens'];
+const ARG_HINT = { '':'(不映射)', um:'(自动取右上角 UM 号)', const:'固定值', config:'配置键，如 reporterTriggerVersion', req:'请求体路径，如 model', res:'响应体路径，如 choices.0.message.content', record:'元数据，如 statusCode / requestHeaders.x-user-id', uuid:'(无需填)', reqText:'(整段请求文本)', resText:'(整段响应文本)', field:'本条已解析的目标字段名，如 acceptResult（须排在其后）' };
 const ARG_DISABLED_SRC = ['','um','uuid','reqText','resText'];
 const TARGET_HINTS = {
   saveRecord: 'AI 响应完成后保存交互记录。必填字段已按报文预填，非必填可留空（不上送该字段）。',
@@ -1539,7 +1628,10 @@ function fieldRowHtml(f, spec, cols) {
   const argVal = src === 'const' ? (spec.value ?? '') : src === 'config' ? (spec.key ?? '') : (spec ? (spec.path ?? '') : '');
   const argDisabled = ARG_DISABLED_SRC.includes(src) ? 'disabled' : '';
   const srcOpts = MAP_SOURCES.map(s => `<option value="${s}" ${s===src?'selected':''}>${SOURCE_LABEL[s]||s}</option>`).join('');
-  const trOpts = MAP_TRANSFORMS.map(t => `<option value="${t}" ${t===((spec&&spec.transform)||'')?'selected':''}>${t||'—'}</option>`).join('');
+  // 兜底：若当前 spec 的 transform 不在预置列表里，也加进选项，避免渲染时丢选中值 → 保存时丢 transform
+  const curTr = (spec && spec.transform) || '';
+  const trList = MAP_TRANSFORMS.includes(curTr) ? MAP_TRANSFORMS : [...MAP_TRANSFORMS, curTr];
+  const trOpts = trList.map(t => `<option value="${t}" ${t===curTr?'selected':''}>${t||'—'}</option>`).join('');
   const cells = [`<td><span class="fieldname" data-field="${esc(f.name)}" style="color:#79c0ff;font-weight:600">${esc(f.name)}</span></td>`];
   if (cols.type) cells.push(`<td class="meta">${esc(f.type)}</td>`);
   if (cols.required) cells.push(`<td class="${f.required?'req-yes':'req-no'}">${f.required?'必填':'选填'}</td>`);
@@ -1571,7 +1663,8 @@ function collectMapping() {
     const arg = tr.querySelector('.arg').value.trim();
     const transform = tr.querySelector('.tr').value;
     const spec = { source };
-    if (source === 'const') spec.value = arg;
+    // const 值：纯整数按数字存（如 isStatistics=1），避免把 Integer 字段发成字符串 "1"
+    if (source === 'const') spec.value = /^-?\d+$/.test(arg) ? Number(arg) : arg;
     else if (source === 'config') spec.key = arg;
     else if (['req','res','record'].includes(source) && arg) spec.path = arg;
     if (transform) spec.transform = transform;

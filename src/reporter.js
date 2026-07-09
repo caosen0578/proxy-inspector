@@ -6,6 +6,7 @@ const { REPORTER_BATCH_SIZE, REPORTER_FLUSH_MS, REPORTER_MAX_ATTEMPTS,
         REPORTER_QUEUE_FILE, REPORTER_HISTORY_MAX } = config;
 const settings = require('./settings');
 const { toSaveRecord } = require('./reporter-mapping');
+const debugLog = require('./debug-log');
 
 // 已送达历史里每条 body 的最大留存长度（仅供 UI 预览；全量从 trafficStore 取）
 const HISTORY_BODY_MAX = 65536; // 64KB
@@ -91,7 +92,24 @@ class Reporter extends EventEmitter {
 
     // 提前计算上送报文：result（SSE 全部内容）与 acceptResult（提取出的代码）
     // 任一为空都跳过——既无内容、或本轮没产出代码，都不上送。
-    if (!this._passesContentFilter({ record }, cfg)) return false;
+    // 这里算一次 body，同时用于内容过滤与调试 CSV，避免重复计算。
+    const body = toSaveRecord(record, { mapping: settings.mappingForUrl(record.url), config: cfg });
+    if (!body.result || !body.acceptResult) return false;
+
+    // 调试落 JSONL（仅管理员开启，默认关）：这是"确定要上送"的记录，正好命中此处。
+    // 每条 record 因 enqueuedIds 去重只入队一次，故不会重复写。写失败不影响上送。
+    if (cfg.debugLogEnabled) {
+      debugLog.append({
+        time: new Date().toISOString(),
+        id: record.id,                 // = 抓包页记录 id，可据此搜索对应报文
+        requestId: body.requestId,
+        prompt: body.prompt,
+        result: body.result,
+        acceptResult: body.acceptResult,
+        requestRaw: record.requestBody || '',    // 请求完整报文体
+        responseRaw: record.responseBody || '',  // 响应完整报文体（SSE 原文，供取证复现代码提取）
+      });
+    }
 
     if (record.id != null) this.enqueuedIds.add(record.id);
     const entry = {
@@ -217,13 +235,19 @@ class Reporter extends EventEmitter {
       url = cfg.reporterBaseUrl + config.BEHAVIOR_SAVE_PATH;
       body = toSaveRecord(entry.record, { mapping: settings.mappingForUrl(entry.record.url), config: cfg });
       extra.headers = { [config.BEHAVIOR_TOKEN_HEADER]: cfg.reporterToken || '' };
+      // 调试落盘（默认关）：会把上送原始报文=用户代码写到磁盘，投产环境勿开。
+      // 需要排查“传值/类型”问题时，设环境变量 DEBUG_UPLOAD=1 再启动即可。
+      if (process.env.DEBUG_UPLOAD === '1') dumpUploadDebug(url, body);
     } else {
       url = cfg.reporterUrl;
       body = { records: [entry.record] };
     }
-    // 单次发送；重试由 _flush 按周期驱动，最多 REPORTER_MAX_ATTEMPTS 次
+    // 单次发送；重试由 _flush 按周期驱动，最多 REPORTER_MAX_ATTEMPTS 次。
+    // 超时取配置 reporterTimeoutMs（仅管理员可改）：须 > 后端最坏响应时间，否则后端慢成功时
+    // 客户端先超时→误判失败→重发→重复上送（接收端幂等兜底，但调大此值能从源头减少重发）。
+    const timeout = Number(cfg.reporterTimeoutMs) > 0 ? Number(cfg.reporterTimeoutMs) : config.REPORTER_TIMEOUT_MS;
     try {
-      const resp = await axios.post(url, body, { timeout: 5000, ...extra });
+      const resp = await axios.post(url, body, { timeout, ...extra });
       entry.response = buildResponseSnapshot(resp.status, resp.statusText, resp.data);
       // 埋点接口即便 HTTP 200 也可能业务失败：靠响应体 code/success 判定真正成败
       // 成功：code === '0'（或 success === true）；失败：code 非 0（如 code:'1', msg:'requestId不能为空'）
@@ -355,6 +379,30 @@ class Reporter extends EventEmitter {
   }
 }
 
+// 调试：把「实际上送的原始报文」+「逐字段类型」落盘到项目根 last-upload-debug.json，
+// 用于排查“某个字段的值/类型有问题导致接口反序列化失败”。每次上送覆盖写，仅最近一条。
+function dumpUploadDebug(url, body) {
+  try {
+    const json = JSON.stringify(body);
+    const fields = {};
+    for (const k of Object.keys(body || {})) {
+      const v = body[k];
+      fields[k] = { type: Array.isArray(v) ? 'array' : (v === null ? 'null' : typeof v),
+                    preview: typeof v === 'string' ? (v.length > 120 ? v.slice(0, 120) + '…' : v) : v };
+    }
+    let jsonValid = true, jsonErr = null;
+    try { JSON.parse(json); } catch (e) { jsonValid = false; jsonErr = e.message; }
+    const out = {
+      at: new Date().toISOString(), url,
+      byteLength: Buffer.byteLength(json, 'utf8'),
+      jsonValid, jsonErr,
+      fields,
+      rawBody: json,   // 原始字节，逐字符可查
+    };
+    fs.writeFileSync(require('path').join(__dirname, '..', 'last-upload-debug.json'), JSON.stringify(out, null, 2));
+  } catch { /* 调试失败不影响主流程 */ }
+}
+
 // 构造上送接口响应快照（状态码 + 文本化的响应体），供 UI 展示。
 // 响应体超过 64KB 截断，避免个别接口回大报文撑爆内存。
 function buildResponseSnapshot(status, statusText, data) {
@@ -373,14 +421,18 @@ function buildResponseSnapshot(status, statusText, data) {
 }
 
 // 判定埋点接口的业务成败：HTTP 200 不代表成功，要看响应体 code/success。
-//   behavior 模式：code === '0'（或 success === true）为成功；其余视为失败，取 msg 作错误提示。
+//   behavior 模式：兼容两种格式
+//     - 原始埋点接口格式：code === '0'（或 success === true）
+//     - 内网统一格式（user-behavior-track）：resultCode === '00000000'
 //   raw 模式：无统一响应契约，沿用 HTTP 状态（能走到这里就是 2xx）= 成功。
 function bizResult(cfg, data) {
   if (cfg.reporterFormat !== 'behavior') return { ok: true };
   if (data == null || typeof data !== 'object') return { ok: true }; // 非 JSON 响应，不强判，按 HTTP 成功处理
   const code = data.code;
-  const ok = (code === '0' || code === 0) || (code == null && data.success === true);
-  return { ok, msg: data.msg || data.message || '' };
+  const ok = (code === '0' || code === 0) ||
+             (code == null && data.success === true) ||
+             data.resultCode === '00000000';
+  return { ok, msg: data.msg || data.message || data.resultMessage || '' };
 }
 
 // apiToken 掩码：报文展示用，不暴露明文。空→空；否则一律固定掩码（不泄露长度/首尾）。

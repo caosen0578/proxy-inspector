@@ -20,6 +20,10 @@ const defaults = {
   appTitle: '资金同业代码解析工具',
   // 界面显示的版本号（页头中间），可在「上送设置」里修改
   appVersion: '版本号：fat001- v1.0.0',
+  // 局域网访问开关（仅管理员）。false=只绑回环 127.0.0.1（内核级安全，局域网访问不到）；
+  // true=绑 0.0.0.0 并放开 Host 白名单，局域网其他机器可访问本机面板/代理。
+  // ⚠️ 开启=暴露抓到的代码/令牌 + 代理变开放代理，仅在明确需要时临时开。改后需重启生效。
+  lanAccess: false,
   // 上送总开关
   reporterEnabled: !!config.REPORTER_URL,
   // 上送目标地址（raw 模式）
@@ -30,6 +34,12 @@ const defaults = {
   reporterBaseUrl: config.REPORTER_BASE_URL || '',
   reporterToken: config.REPORTER_TOKEN || '',
   reporterTriggerVersion: config.REPORTER_TRIGGER_VERSION || 'proxy-inspector',
+  // 单次上送 HTTP 超时（毫秒）。需 > 上送后端最坏响应时间，避免后端慢成功时客户端误超时重发→重复上送。
+  // 仅管理员可改（PUT /settings 已 requireAdmin）。范围 1000~120000，越界自动夹取。
+  reporterTimeoutMs: config.REPORTER_TIMEOUT_MS,
+  // 调试：把每条"需要上送的记录"同步落一份本地 JSONL（upload-debug-log.jsonl），供离线检索。
+  // 仅管理员可改（PUT /settings 已 requireAdmin）。⚠️ 会把 prompt/代码/请求报文明文写盘，默认关。
+  debugLogEnabled: false,
   // UM 号（= 系统用户名），上送 createdBy 用，统计个人代码生成率。
   // 默认自动取系统用户名；仅当用户在界面手动改过(umAccountManual=true)才持久化沿用，
   // 否则每次启动按当前机器重新探测——避免拷贝 settings.json 到别的机器后显示错误的用户名。
@@ -101,6 +111,8 @@ function update(patch) {
     next.reporterFilters = normalizeFilters(next.reporterFilters);
   }
   if (next.reporterEnabled !== undefined) next.reporterEnabled = !!next.reporterEnabled;
+  if (next.lanAccess !== undefined) next.lanAccess = !!next.lanAccess;
+  if (next.debugLogEnabled !== undefined) next.debugLogEnabled = !!next.debugLogEnabled;
   if (next.reporterUrl !== undefined) next.reporterUrl = String(next.reporterUrl).trim();
   if (next.reporterFormat !== undefined) {
     next.reporterFormat = next.reporterFormat === 'behavior' ? 'behavior' : 'raw';
@@ -108,6 +120,11 @@ function update(patch) {
   if (next.reporterBaseUrl !== undefined) next.reporterBaseUrl = String(next.reporterBaseUrl).trim().replace(/\/+$/, '');
   if (next.reporterToken !== undefined) next.reporterToken = String(next.reporterToken).trim();
   if (next.reporterTriggerVersion !== undefined) next.reporterTriggerVersion = String(next.reporterTriggerVersion).trim();
+  if (next.reporterTimeoutMs !== undefined) {
+    // 数字化 + 夹取到 [1000, 120000]；非法值回退默认，避免 0/负数/NaN 把上送超时设崩
+    const n = Math.round(Number(next.reporterTimeoutMs));
+    next.reporterTimeoutMs = Number.isFinite(n) ? Math.min(120000, Math.max(1000, n)) : config.REPORTER_TIMEOUT_MS;
+  }
   if (next.umAccount !== undefined) { next.umAccount = String(next.umAccount).trim().toLowerCase(); next.umAccountManual = true; }
   if (next.streamPassthrough !== undefined) next.streamPassthrough = normalizeFilters(next.streamPassthrough);
   if (next.reporterTargets !== undefined) next.reporterTargets = normalizeTargets(next.reporterTargets);
@@ -181,4 +198,11 @@ function isPassthrough(url) {
   return list.some(p => matchPattern(url, p));
 }
 
-module.exports = { get, update, mappingForUrl, matchPattern, isPassthrough };
+// 启动时的监听网卡：环境变量 BIND_HOST 显式优先；否则由 lanAccess 决定
+// （开=0.0.0.0 放开局域网，关=127.0.0.1 只回环）。改 lanAccess 后需重启才换绑。
+function bindHost() {
+  if (process.env.BIND_HOST) return process.env.BIND_HOST;
+  return state.lanAccess ? '0.0.0.0' : '127.0.0.1';
+}
+
+module.exports = { get, update, mappingForUrl, matchPattern, isPassthrough, bindHost };

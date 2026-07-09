@@ -7,6 +7,10 @@ const reporter = require('./reporter');
 const config = require('./config');
 const admin = require('./admin');
 
+// 启动时实际绑定的网卡是否 0.0.0.0（局域网可达）。绑定在启动时定死，故这里在
+// 模块加载(启动)时快照一次；之后 UI 改 lanAccess 只影响“下次重启”，用它对比即可提示“重启后生效”。
+const BOOT_LAN_EXPOSED = settings.bindHost() === '0.0.0.0';
+
 // 管理员会话从请求头 x-admin-session 读取（前端解锁后带上）
 function sidOf(req) { return req.get('x-admin-session') || ''; }
 // 保护中间件：非管理员一律 403，前端据此挡住「上送设置」「字段映射」的写操作
@@ -101,6 +105,18 @@ function buildRouter() {
   // 写入：仅管理员（含上送地址/Token/字段映射等敏感配置）
   r.put('/settings', requireAdmin, (req, res) => res.json(settings.update(req.body || {})));
 
+  // 调试日志下载（仅管理员）：JSONL，含 prompt/代码明文，绝不下发给非管理员
+  r.get('/debug/log', requireAdmin, (req, res) => {
+    const fs = require('fs');
+    const debugLog = require('./debug-log');
+    if (!fs.existsSync(debugLog.LOG_FILE)) {
+      return res.status(404).json({ error: '暂无调试记录（未开启，或还没有需要上送的记录）' });
+    }
+    res.setHeader('content-type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('content-disposition', 'attachment; filename="upload-debug-log.jsonl"');
+    res.sendFile(debugLog.LOG_FILE);
+  });
+
   // 上送队列：状态快照 / 手动重试失败项 / 清空队列
   // 字段映射预览：用给定映射 + 一条流量（默认最近一条，可指定 recordId）算出上送报文体
   r.post('/mapping/preview', (req, res) => {
@@ -172,14 +188,30 @@ function buildRouter() {
       reporterFilterCount: s.reporterFilters.length,
       trafficCount: trafficStore.records.length,
       ruleCount: ruleEngine.list().length,
+      lanAccess: !!s.lanAccess,          // 已保存的开关（下次重启生效）
+      lanExposed: BOOT_LAN_EXPOSED,      // 本次运行实际是否已暴露到局域网
     });
   });
 
   return r;
 }
 
+// 允许的 Host（防 DNS rebinding：恶意网页把某域名解析到 127.0.0.1 再打本地面板）。
+// 面板只绑本机,正常访问 Host 必是 localhost/127.0.0.1/[::1]（可带端口）。
+// 开了局域网访问(lanAccess)时放行任意 Host（此时是有意暴露给局域网，Host 会是本机 IP）。
+function hostAllowed(req) {
+  if (settings.get().lanAccess) return true;
+  const host = (req.headers.host || '').split(':')[0].toLowerCase().replace(/^\[|\]$/g, '');
+  return host === '' || host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
 function createApp(wss) {
   const app = express();
+  // Host 白名单：非本机 Host 一律 403（挡住 DNS rebinding / 借域名打本地）
+  app.use((req, res, next) => {
+    if (!hostAllowed(req)) return res.status(403).type('text/plain').send('forbidden host');
+    next();
+  });
   app.use(express.json());
   app.use(express.static(path.join(__dirname, '..', 'web', 'public')));
   app.use('/api', buildRouter());

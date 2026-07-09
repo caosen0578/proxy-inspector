@@ -5,6 +5,8 @@ secrets/
 settings.json
 reporter-queue.json
 rules.json
+last-upload-debug.json
+upload-debug-log*
 *.log
 
 # 打包输出
@@ -31,3 +33,6 @@ docjpg/*.png
 /docjpg/field-mapping-review.md
 /docjpg/报文字段分析.md
 /docjpg/用户行为埋点接口文档-v1.0.md
+
+# 环境配置(含 token，勿入库/勿分发)
+env/

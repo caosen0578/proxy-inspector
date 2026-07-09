@@ -95,9 +95,11 @@ data:{"choices":[{"delta":{"tool_calls":[{"function":{"name":"write_to_file","ar
 ```
 → 拼接为 `{"content":"class A { int x; }"}` → 正确提取 `class A { int x; }`。
 
-**优先级 2：delta.content ``` 围栏代码块**
+**优先级 2：delta.content ``` 围栏代码块（与工具代码并集，不再短路）**
 
-若无工具调用，检查 `delta.content` 拼接后是否含 ` ``` `，有则提取围栏内代码。
+检查 `delta.content` 拼接后是否含 ` ``` `，有则提取围栏内代码，**并入**工具代码。
+> 2026-07 修复：早期这里是"有工具代码就直接返回、忽略围栏"（短路），会丢掉同一轮里
+> 模型既写文件又在旁白贴的代码。现改为并集（按代码文本去重，避免"先贴预览再写文件"重复）。
 
 **优先级 3：纯说明文字 → 返回空**
 
@@ -107,14 +109,15 @@ data:{"choices":[{"delta":{"tool_calls":[{"function":{"name":"write_to_file","ar
 
 ```
 function extractGeneratedCode(raw):
-  tool = toolCallsCode(raw)        // 遍历 tool_calls 提取写入代码
-  if tool != '': return tool       // 有写入工具调用，直接用
+  parts = []
+  for w in toolCallsWrites(raw): add(parts, w.code)   // 工具写入代码（去重）
 
-  content = sseJoinContent(raw)    // 拼接所有 delta.content
-  if content 含 ```: return extractCodeBlocks(content)  // 有围栏，取围栏内
-  if isCompletionStyle(raw): return content             // 补全接口裸代码
+  content = sseJoinContent(raw)                        // 拼接所有 delta.content
+  blocks = codeBlocksOf(content)
+  if blocks 非空: for b in blocks: add(parts, b)       // 围栏代码并入（不再短路）
+  else if parts 为空 and isCompletionStyle(raw): add(parts, content)  // 补全裸代码
 
-  return ''                        // 纯说明文字，丢弃
+  return parts.join('\n\n')       // 全空 → '' → 丢弃
 ```
 
 ---
@@ -125,11 +128,16 @@ function extractGeneratedCode(raw):
 
 | 字段 | transform | 取什么 |
 |------|-----------|--------|
-| **result** | `sseContent` | **SSE 解析后的全部内容**（拼接所有 `choices[0].delta.content` / `choices[0].text`），不含工具调用 arguments |
-| **acceptResult** | `sseCodeAll` | **AI 实际产出代码**（上面"代码提取规则"三级优先：工具调用 / 围栏 / 补全裸代码） |
+| **result** | `sseFullReply` | **完整回复** = `delta.content` 旁白 + 每次工具写入的文件（以 ``` 围栏嵌入、上方标 `filePath`）。补全接口无工具时即 `choices[0].text` 全量 |
+| **acceptResult** | `sseCodeAll` | **AI 实际产出代码**（上面"代码提取规则"：工具写入 ∪ 围栏 / 补全裸代码） |
 
 > 补全接口 `/v2/completions`：`result` 与 `acceptResult` 往往一致（都来自 `choices[0].text`）。
-> 对话接口 `/v2/chat/completions`：纯工具调用时 `delta.content` 可能为空 → `result` 为空，而 `acceptResult` 有代码。
+> 对话接口 `/v2/chat/completions`：`result` 现含工具写入的文件内容，`acceptResult` 是其中的代码部分。
+>
+> **2026-07 修复（重要）**：早期 `result=sseContent` 只取 `delta.content` 旁白 → Agent 写码轮次
+> `result` 只剩一行标题、代码全丢；更严重的是**纯工具调用、旁白为空的轮次 `result=''`，被下面
+> 第五节的内容过滤直接丢弃、整轮不上送**（这正是"应用到文件的代码没上送"的一个主因）。改用
+> `sseFullReply` 后，工具写入的代码进入 `result` → 非空 → 这类轮次恢复上送。
 
 ---
 
@@ -145,9 +153,11 @@ function extractGeneratedCode(raw):
 
 ## 六、对照表
 
-| 接口 | result（全部内容） | acceptResult（代码） | codeLines/codeSize |
+| 接口 | result（完整回复） | acceptResult（代码） | codeLines/codeSize |
 |------|------------------|---------------------|--------------------|
 | `/v2/completions` | `choices[0].text` 全量拼接 | 同左（补全裸代码即代码） | 按 acceptResult 算 |
-| `/v2/chat/completions` | `delta.content` 拼接（说明文字，可能为空） | 工具调用 `write_to_file.content` + `replace_in_file.new_str` | 按 acceptResult 算 |
+| `/v2/chat/completions` | `delta.content` 旁白 + 工具写入文件（围栏块，带 filePath） | 工具写入 `write_to_file.content` + `replace_in_file.new_str` ∪ 旁白围栏代码 | 按 acceptResult 算 |
 
-> **核心理念**：`acceptResult` 是"AI 实际写入本地文件的那部分代码"；`result` 是模型这轮回复的完整文本内容。两者任一为空都不上送。
+> **核心理念**：`acceptResult` 是"AI 实际写入本地文件的那部分代码"；`result` 是模型这轮回复的完整内容（含写入的文件）。两者任一为空都不上送。
+>
+> **被动抓包的固有边界**：`replace_in_file` 只有 `new_str`（改动块），合并后的**整文件内容留在 IDE 本地、不经过网络**，无法补齐；`execute_command` 若用 shell 写文件也抓不到"生成代码"。
