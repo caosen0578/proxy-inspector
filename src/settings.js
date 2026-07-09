@@ -86,6 +86,15 @@ function load() {
       delete state.reporterMapping;
       delete state.reporterMappings;
       state.reporterTargets = normalizeTargets(state.reporterTargets);
+      // 迁移：修复 result 缺代码（2026-07）。旧默认映射 result=sseContent 只取旁白，
+      // Agent 工具写码轮 result 丢代码、纯工具轮更被内容过滤整轮丢弃。已分发机器的
+      // settings.json 都存着旧映射会盖住新 DEFAULT_MAPPING，故在此自动升级。
+      // 只动"恰好还是旧默认形态"的（source:resText+transform:sseContent），用户自定义的不碰。
+      const savedResult = state.reporterTargets.saveRecord.mapping.result;
+      if (savedResult && savedResult.source === 'resText' && savedResult.transform === 'sseContent') {
+        savedResult.transform = 'sseFullReply';
+        console.log('[settings] 映射迁移: result sseContent → sseFullReply（补齐工具写入代码）');
+      }
       // 非手动设置则始终按当前机器重新探测（防止拷贝来的 settings.json 带着别人的用户名）
       if (!state.umAccountManual || !state.umAccount) state.umAccount = detectUm();
       // 统一小写：兼容历史 settings.json 里存的大写用户名
