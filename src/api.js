@@ -105,6 +105,13 @@ function buildRouter() {
   // 写入：仅管理员（含上送地址/Token/字段映射等敏感配置）
   r.put('/settings', requireAdmin, (req, res) => res.json(settings.update(req.body || {})));
 
+  // 新版本检查：拉内网 version.json 与本地版本比较（所有人可查，横幅通知用；
+  // 检查地址 updateCheckUrl 的修改仍仅管理员）。?force=1 跳过后端缓存（手动「检查更新」）。
+  r.get('/update/check', async (req, res) => {
+    const result = await require('./update-check').check(req.query.force === '1');
+    res.json(result);
+  });
+
   // 调试日志下载（仅管理员）：JSONL，含 prompt/代码明文，绝不下发给非管理员
   r.get('/debug/log', requireAdmin, (req, res) => {
     const fs = require('fs');

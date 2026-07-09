@@ -17,6 +17,8 @@ module.exports = {
   // 只约束「连接建立」这一段：连接一旦就绪即撤销计时，之后等模型出首字/流式思考再久也
   // 不打断，故不影响 SSE 补全。默认 10s(到 API 的 TCP+TLS 正常应在数秒内完成)。
   UPSTREAM_CONNECT_TIMEOUT_MS: +process.env.UPSTREAM_CONNECT_TIMEOUT_MS || 10000,
+  // 新版本检查地址（内网 version.json），空=关闭。也可在面板「上送设置」里配（仅管理员）
+  UPDATE_CHECK_URL: process.env.UPDATE_CHECK_URL || '',
   // 报文上送目标地址（raw 模式：直接 POST {records:[...]}）
   REPORTER_URL: process.env.REPORTER_URL || '',
   // 上送格式：'raw' 原始报文批量 | 'behavior' 映射为用户行为埋点接口

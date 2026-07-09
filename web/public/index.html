@@ -198,6 +198,7 @@ tbody td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflo
 </head>
 <body>
 <div id="lanBanner" style="display:none;background:#7d1a1a;color:#ffd7d7;font-size:13px;text-align:center;padding:6px 12px;font-weight:600"></div>
+<div id="updateBanner" style="display:none;background:#0d3a58;color:#bfe3ff;font-size:13px;text-align:center;padding:6px 12px;font-weight:600"></div>
 <header>
   <h1 id="appTitleH1">⚡ 资金同业代码解析工具</h1>
   <div class="badge">代理端口 <span id="proxyPort">-</span></div>
@@ -207,6 +208,7 @@ tbody td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflo
   <div class="ws-dot" id="wsDot" title="WebSocket 状态"></div>
   <div class="spacer"></div>
   <div id="appVersionBox" class="badge" title="版本号，可在「上送设置」里修改"><span id="appVersionH">v1.0.0</span></div>
+  <button id="checkUpdateBtn" onclick="manualCheckUpdate()" title="检查是否有新版本（需管理员在「上送设置」配置检查地址）" style="background:#161b22;border:1px solid #30363d;border-radius:6px;color:#8b949e;font-size:12px;padding:3px 10px;cursor:pointer">检查更新</button>
   <div class="spacer"></div>
   <div id="umBox" title="UM 号 = 系统用户名，作为上送 createdBy（统计个人代码生成率）。点击可修改" style="display:flex;align-items:center;gap:6px;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer" onclick="editUm()">
     <span style="color:#8b949e">UM</span>
@@ -381,6 +383,10 @@ tbody td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflo
         <label>版本号</label>
         <input id="appVersionInput" placeholder="v1.0.0">
         <p style="color:#8b949e;font-size:11px;margin:2px 0 10px">显示在页头中间，保存后立即生效。</p>
+
+        <label>新版本检查地址（version.json）</label>
+        <input id="updateCheckUrlInput" placeholder="http://内网服务器/proxy-inspector/version.json">
+        <p style="color:#8b949e;font-size:11px;margin:2px 0 10px">指向内网 version.json（含 version / downloadUrl / notes）。留空 = 关闭检查。配置后页面每 2 小时自动检查，有新版在页头下方弹通知横幅；页头「检查更新」按钮可手动触发。版本比较基于程序内置版本（package.json），发新版时记得同步更新。</p>
 
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
           <div class="toggle" id="lanToggle" onclick="toggleLan()"></div>
@@ -1429,6 +1435,7 @@ async function loadReportSettings() {
   applyAppTitle(s.appTitle);
   document.getElementById('appVersionInput').value = s.appVersion || '';
   applyAppVersion(s.appVersion);
+  document.getElementById('updateCheckUrlInput').value = s.updateCheckUrl || '';
   document.getElementById('reportFormat').value = s.reporterFormat || 'behavior';
   document.getElementById('reportBaseUrl').value = s.reporterBaseUrl || '';
   document.getElementById('reportToken').value = s.reporterToken || '';
@@ -1498,6 +1505,50 @@ function toggleLan() {
   renderLanToggle();
 }
 
+// ── 新版本检查：横幅通知 + 手动检查 ──
+// 自动：页面加载时查一次 + 每 2 小时轮询（走后端 /api/update/check，后端有 10 分钟缓存）。
+// 「不再提醒」按版本号记 localStorage——出了更新的版本会重新弹。手动检查无视该标记并强制刷新。
+const UPD_DISMISS_KEY = 'updDismissVersion';
+function renderUpdateBanner(u) {
+  const b = document.getElementById('updateBanner');
+  if (!u || !u.hasUpdate) { b.style.display = 'none'; return; }
+  b.textContent = '';
+  // DOM API 组装（manifest 内容不进 innerHTML，天然免注入）
+  b.append('🔔 新版本 v' + u.latest + ' 已发布（当前 v' + u.current + '）' + (u.notes ? '：' + u.notes : '') + ' ');
+  if (u.downloadUrl) {
+    const a = document.createElement('a');
+    a.href = u.downloadUrl; a.target = '_blank'; a.rel = 'noopener';
+    a.style.color = '#58a6ff'; a.textContent = '下载新版';
+    b.append(a);
+  }
+  const d = document.createElement('a');
+  d.href = 'javascript:void(0)'; d.style.color = '#8b949e'; d.style.marginLeft = '10px';
+  d.textContent = '本版本不再提醒';
+  d.onclick = () => dismissUpdate(u.latest);
+  b.append(d);
+  b.style.display = '';
+}
+function dismissUpdate(version) {
+  localStorage.setItem(UPD_DISMISS_KEY, version);
+  document.getElementById('updateBanner').style.display = 'none';
+}
+async function checkUpdate(force, manual) {
+  let u;
+  try { u = await fetch('/api/update/check' + (force ? '?force=1' : '')).then(x => x.json()); }
+  catch { if (manual) showToast('检查更新失败：网络错误'); return; }
+  if (manual) {
+    if (!u.enabled) { showToast('未配置检查地址（管理员在「上送设置」填写 version.json 地址）'); return; }
+    if (u.error) { showToast('检查更新失败：' + u.error); return; }
+    if (!u.hasUpdate) { showToast('已是最新版本 v' + u.current); return; }
+    renderUpdateBanner(u); // 手动检查无视"不再提醒"
+    return;
+  }
+  if (u.hasUpdate && localStorage.getItem(UPD_DISMISS_KEY) !== u.latest) renderUpdateBanner(u);
+}
+function manualCheckUpdate() { checkUpdate(true, true); }
+checkUpdate(false, false);
+setInterval(() => checkUpdate(false, false), 2 * 60 * 60 * 1000);
+
 // 调试落盘(JSONL)开关（仅管理员，随「保存设置」持久化，保存后即生效）
 let debugLogEnabled = false;
 function renderDebugLogToggle() {
@@ -1536,6 +1587,7 @@ async function saveReportSettings() {
   const body = {
     appTitle: document.getElementById('appTitleInput').value,
     appVersion: document.getElementById('appVersionInput').value,
+    updateCheckUrl: document.getElementById('updateCheckUrlInput').value,
     lanAccess: lanEnabled,
     debugLogEnabled: debugLogEnabled,
     reporterEnabled: reportEnabled,

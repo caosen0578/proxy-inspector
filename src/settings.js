@@ -37,6 +37,9 @@ const defaults = {
   // 单次上送 HTTP 超时（毫秒）。需 > 上送后端最坏响应时间，避免后端慢成功时客户端误超时重发→重复上送。
   // 仅管理员可改（PUT /settings 已 requireAdmin）。范围 1000~120000，越界自动夹取。
   reporterTimeoutMs: config.REPORTER_TIMEOUT_MS,
+  // 新版本检查地址（内网 version.json，见 src/update-check.js）。空 = 关闭检查。
+  // 仅管理员可改（PUT /settings 已 requireAdmin）——防止被指到恶意下载源。
+  updateCheckUrl: config.UPDATE_CHECK_URL || '',
   // 调试：把每条"需要上送的记录"同步落一份本地 JSONL（upload-debug-log.jsonl），供离线检索。
   // 仅管理员可改（PUT /settings 已 requireAdmin）。⚠️ 会把 prompt/代码/请求报文明文写盘，默认关。
   debugLogEnabled: false,
@@ -122,6 +125,7 @@ function update(patch) {
   if (next.reporterEnabled !== undefined) next.reporterEnabled = !!next.reporterEnabled;
   if (next.lanAccess !== undefined) next.lanAccess = !!next.lanAccess;
   if (next.debugLogEnabled !== undefined) next.debugLogEnabled = !!next.debugLogEnabled;
+  if (next.updateCheckUrl !== undefined) next.updateCheckUrl = String(next.updateCheckUrl).trim();
   if (next.reporterUrl !== undefined) next.reporterUrl = String(next.reporterUrl).trim();
   if (next.reporterFormat !== undefined) {
     next.reporterFormat = next.reporterFormat === 'behavior' ? 'behavior' : 'raw';
