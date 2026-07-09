@@ -34,10 +34,16 @@ function currentVersion() {
   return extractVersion(settings.get().appVersion) || PKG_VERSION;
 }
 
+// 版本停用状态（供 proxy 每请求查询，纯内存布尔）。
+// 仅在「成功拿到检查结果」时更新；检查失败保持上一次状态——服务临时不可达不误伤（fail-open）。
+let disabledState = { disabled: false, minVersion: '', downloadUrl: '' };
+function isDisabled() { return disabledState.disabled; }
+function disabledInfo() { return { ...disabledState }; }
+
 async function check(force) {
   const url = (settings.get().updateCheckUrl || '').trim();
   const current = currentVersion();
-  if (!url) return { enabled: false, current };
+  if (!url) { disabledState = { disabled: false, minVersion: '', downloadUrl: '' }; return { enabled: false, current }; }
   if (!force && cache && Date.now() - cache.at < CACHE_MS) return cache.result;
 
   let result;
@@ -46,21 +52,34 @@ async function check(force) {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const m = await res.json();
     if (!m || typeof m.version !== 'string') throw new Error('返回数据缺少 version 字段');
+    // minVersion（可选）：低于此版本 → 本版本停用（代理拦新请求，上送队列不受影响）
+    const minVersion = typeof m.minVersion === 'string' ? (extractVersion(m.minVersion) || '') : '';
+    const disabled = !!minVersion && cmpVersion(current, minVersion) < 0;
+    const downloadUrl = typeof m.downloadUrl === 'string' ? m.downloadUrl : '';
+    disabledState = { disabled, minVersion, downloadUrl };
     result = {
       enabled: true,
       current,
       latest: extractVersion(m.version) || m.version, // 展示归一化后的版本（'- v1.0.1' → '1.0.1'）
       hasUpdate: cmpVersion(m.version, current) > 0,
-      downloadUrl: typeof m.downloadUrl === 'string' ? m.downloadUrl : '',
+      minVersion,
+      disabled,
+      downloadUrl,
       notes: typeof m.notes === 'string' ? m.notes : '',
       checkedAt: Date.now(),
     };
   } catch (e) {
-    // 失败静默：内网服务临时不可达不该打扰使用，横幅不弹；手动检查时前端会把 error 提示出来
-    result = { enabled: true, current, error: e.message, checkedAt: Date.now() };
+    // 失败静默：内网服务临时不可达不该打扰使用，横幅不弹；手动检查时前端会把 error 提示出来。
+    // disabledState 保持上一次成功结果（fail-open：从未成功过 = 不停用）。
+    result = { enabled: true, current, disabled: disabledState.disabled, error: e.message, checkedAt: Date.now() };
   }
   cache = { at: Date.now(), result };
   return result;
 }
 
-module.exports = { check, cmpVersion, extractVersion, currentVersion };
+// 后端自查定时器：停用管控不能依赖用户开着面板。启动 5 秒后首查，此后每 2 小时。
+// unref：不阻止进程退出。检查地址未配置时 check() 直接返回，零开销。
+setTimeout(() => { check(false).catch(() => {}); }, 5000).unref();
+setInterval(() => { check(true).catch(() => {}); }, 2 * 60 * 60 * 1000).unref();
+
+module.exports = { check, cmpVersion, extractVersion, currentVersion, isDisabled, disabledInfo };

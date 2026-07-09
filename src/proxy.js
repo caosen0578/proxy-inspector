@@ -79,6 +79,19 @@ function startProxy() {
       return;
     }
 
+    // 版本停用（管控端在检查接口下发 minVersion，本地版本低于它）：新请求一律 503 不转发。
+    // 只拦「新流量经过代理」——不产生新抓包记录；已入队的上送继续排空、面板照常可访问（看通知/下载新版）。
+    // 检查失败 fail-open（见 update-check.js），不会因检查服务故障误伤。
+    if (require('./update-check').isDisabled()) {
+      const info = require('./update-check').disabledInfo();
+      ctx.proxyToClientResponse.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' });
+      ctx.proxyToClientResponse.end(
+        `proxy-inspector 当前版本已停用（低于最低要求 v${info.minVersion}），请升级新版后重启。` +
+        (info.downloadUrl ? `\n下载：${info.downloadUrl}` : '') +
+        `\n（打开面板 http://127.0.0.1:${config.UI_PORT} 页头有下载链接）`);
+      return;
+    }
+
     const url = buildUrl(ctx);
     const method = req.method;
     const rule = ruleEngine.match(url, method);

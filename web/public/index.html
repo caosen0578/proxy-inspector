@@ -1520,24 +1520,36 @@ function toggleLan() {
 const UPD_DISMISS_KEY = 'updDismissVersion';
 function renderUpdateBanner(u) {
   const b = document.getElementById('updateBanner');
-  if (!u || !u.hasUpdate) { b.style.display = 'none'; return; }
+  if (!u || (!u.hasUpdate && !u.disabled)) { b.style.display = 'none'; return; }
   b.textContent = '';
+  // 停用态：红色、不可关闭（无「不再提醒」）；升级提醒态：蓝色、可按版本关闭
+  b.style.background = u.disabled
+    ? 'linear-gradient(90deg,#b62324,#da3633)'
+    : 'linear-gradient(90deg,#1f6feb,#388bfd)';
+  b.style.boxShadow = u.disabled ? '0 2px 8px rgba(218,54,51,.5)' : '0 2px 8px rgba(31,111,235,.45)';
   // DOM API 组装（manifest 内容不进 innerHTML，天然免注入）
   const bell = document.createElement('span');
-  bell.className = 'upd-bell'; bell.textContent = '🔔';
+  bell.className = 'upd-bell'; bell.textContent = u.disabled ? '⛔' : '🔔';
   b.append(bell);
-  b.append('发现新版本 v' + u.latest + '（当前 v' + u.current + '）' + (u.notes ? '：' + u.notes : ''));
+  if (u.disabled) {
+    b.append('当前版本 v' + u.current + ' 已停用（最低要求 v' + u.minVersion + '），代理已暂停转发新请求，请立即升级并重启'
+      + (u.notes ? '：' + u.notes : ''));
+  } else {
+    b.append('发现新版本 v' + u.latest + '（当前 v' + u.current + '）' + (u.notes ? '：' + u.notes : ''));
+  }
   if (u.downloadUrl) {
     const a = document.createElement('a');
     a.href = u.downloadUrl; a.target = '_blank'; a.rel = 'noopener';
     a.className = 'upd-dl'; a.textContent = '⬇ 下载新版';
     b.append(a);
   }
-  const d = document.createElement('a');
-  d.href = 'javascript:void(0)'; d.className = 'upd-dismiss';
-  d.textContent = '本版本不再提醒';
-  d.onclick = () => dismissUpdate(u.latest);
-  b.append(d);
+  if (!u.disabled) {
+    const d = document.createElement('a');
+    d.href = 'javascript:void(0)'; d.className = 'upd-dismiss';
+    d.textContent = '本版本不再提醒';
+    d.onclick = () => dismissUpdate(u.latest);
+    b.append(d);
+  }
   b.style.display = '';
 }
 function dismissUpdate(version) {
@@ -1548,14 +1560,16 @@ async function checkUpdate(force, manual) {
   let u;
   try { u = await fetch('/api/update/check' + (force ? '?force=1' : '')).then(x => x.json()); }
   catch { if (manual) showToast('检查更新失败：网络错误'); return; }
+  if (u.disabled) { renderUpdateBanner(u); return; } // 停用态：无视"不再提醒"，必弹红色横幅
   if (manual) {
-    if (!u.enabled) { showToast('未配置检查地址（管理员在「上送设置」填写 version.json 地址）'); return; }
+    if (!u.enabled) { showToast('未配置检查地址（管理员在「上送设置」填写检查接口地址）'); return; }
     if (u.error) { showToast('检查更新失败：' + u.error); return; }
     if (!u.hasUpdate) { showToast('已是最新版本 v' + u.current); return; }
     renderUpdateBanner(u); // 手动检查无视"不再提醒"
     return;
   }
   if (u.hasUpdate && localStorage.getItem(UPD_DISMISS_KEY) !== u.latest) renderUpdateBanner(u);
+  else if (!u.hasUpdate) renderUpdateBanner(u); // 解除停用/已升级后隐藏横幅
 }
 function manualCheckUpdate() { checkUpdate(true, true); }
 checkUpdate(false, false);
