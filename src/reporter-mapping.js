@@ -78,6 +78,7 @@ function sseJoinContent(raw) {
 
 // 从一段文本里按括号配平切出一个个顶层 JSON 对象（正确处理字符串内的引号/转义/花括号）。
 // 用于把流式拼接出来的 tool_calls arguments 还原成完整对象，不依赖 id/name/index 切分。
+// 返回 [{ obj, start }]，start 为对象在原文中的起始偏移（供按偏移回配工具名）。
 function splitJsonObjects(s) {
   const objs = [];
   let depth = 0, start = -1, inStr = false, esc = false;
@@ -94,7 +95,7 @@ function splitJsonObjects(s) {
     else if (ch === '}' && depth > 0) {
       depth--;
       if (depth === 0 && start !== -1) {
-        try { objs.push(JSON.parse(s.slice(start, i + 1))); } catch { /* 半截/非法 JSON 跳过 */ }
+        try { objs.push({ obj: JSON.parse(s.slice(start, i + 1)), start }); } catch { /* 半截/非法 JSON 跳过 */ }
         start = -1;
       }
     }
@@ -109,32 +110,57 @@ function splitJsonObjects(s) {
 // 两半都不是合法 JSON 而全部丢失。因此这里【完全不依赖 id/name/index】：
 // 把所有 arguments 分片按出现顺序全量拼接，再用括号配平切出每个完整 JSON 对象。
 // 这样无论同一调用被拆几段、还是多个真实调用首尾相接（{...}{...}），都能正确还原。
-// 返回本轮工具写入的文件数组 [{ filePath, code }]（按出现顺序、按 code 去重）。
-// 写码工具实测为 write_to_file(字段 content) 与 replace_in_file(字段 new_str)；
-// filePath 兼容多种命名。code 字段优先级 new_str→content→code→newText。
-function toolCallsWrites(raw) {
+// 工具名黏连清洗：模型偶发把 name 重复黏成 write_to_filewrite_to_file → 折叠为单个。
+function collapseGluedName(name) {
+  const m = /^(.+?)\1+$/.exec(name || '');
+  return m ? m[1] : (name || '');
+}
+
+// 解析本轮全部工具调用 → [{ name, obj }]，按流式出现顺序。
+// name 回配：arguments 分片拼接时记录每个带 name 分片对应的缓冲区偏移，
+// 切出的每个 JSON 对象按其起始偏移取"最近一个不超过它的 name"（黏连/重复也能对上，配不上为 ''）。
+function toolCallsAll(raw) {
   let buf = '';
+  const nameMarks = []; // { offset, name }
   for (const c of parseSSE(raw)) {
     const ch = c.choices && c.choices[0];
     const tcs = ch && ch.delta && ch.delta.tool_calls;
     if (!Array.isArray(tcs)) continue;
     for (const tc of tcs) {
+      const nm = tc.function && tc.function.name;
+      if (nm) nameMarks.push({ offset: buf.length, name: collapseGluedName(nm) });
       const a = tc.function && tc.function.arguments;
       if (typeof a === 'string') buf += a;
     }
   }
+  return splitJsonObjects(buf).map(({ obj, start }) => {
+    let name = '';
+    for (const m of nameMarks) { if (m.offset <= start) name = m.name; else break; }
+    return { name, obj };
+  }).filter(it => it.obj && typeof it.obj === 'object');
+}
+
+// 从工具调用对象里取写入代码（无则 undefined）。字段优先级 new_str→content→code→newText。
+function codeOfToolCall(obj) {
+  const code = obj.new_str ?? obj.content ?? obj.code ?? obj.newText;
+  return (typeof code === 'string' && code) ? code : undefined;
+}
+function filePathOfToolCall(obj) {
+  const fp = obj.filePath ?? obj.file_path ?? obj.target_file ?? obj.path;
+  return typeof fp === 'string' ? fp : '';
+}
+
+// 返回本轮工具写入的文件数组 [{ name, filePath, code }]（按出现顺序、按 code 去重）。
+// 写码工具实测为 write_to_file(字段 content) 与 replace_in_file(字段 new_str)。
+// 去重：精度问题会让模型把同一次 write 整个发两遍，按 code 文本去重，避免重复上送、虚高代码量。
+function toolCallsWrites(raw) {
   const out = [];
   const seen = new Set();
-  for (const obj of splitJsonObjects(buf)) {
-    if (!obj || typeof obj !== 'object') continue;
-    const code = obj.new_str ?? obj.content ?? obj.code ?? obj.newText;
-    if (typeof code !== 'string' || !code) continue;
-    // 去重：精度问题会让模型把同一次 write 整个发两遍（write_to_filewrite_to_file），
-    // 切出两个内容相同的 JSON 对象。按 code 文本去重，避免上送重复代码、虚高代码量。
-    if (seen.has(code)) continue;
+  for (const it of toolCallsAll(raw)) {
+    const code = codeOfToolCall(it.obj);
+    if (!code || seen.has(code)) continue;
     seen.add(code);
-    const fp = obj.filePath ?? obj.file_path ?? obj.target_file ?? obj.path;
-    out.push({ filePath: typeof fp === 'string' ? fp : '', code });
+    out.push({ name: it.name, filePath: filePathOfToolCall(it.obj), code });
   }
   return out;
 }
@@ -179,19 +205,43 @@ function extractGeneratedCode(raw) {
   return parts.join('\n\n');
 }
 
-// result 用「完整回复」：模型旁白 + 每次文件写入以 ``` 围栏嵌入（上方标 filePath）。
-// 这样 result 内容完整可读，且 acceptResult 里的代码正是 result 中围栏块的内容，口径一致。
-// 纯聊天/补全（无工具写入）时与旧 sseContent 完全一致，不改变既有行为。
+// 非代码工具的单行留痕参数摘要：单个字符串值 >120 字截断并标注总长，整行 >300 字截断。
+// 代码块（写码工具）永不截断——这里只作用于 read_file/todo_write/execute_command 等。
+// 全文永远可在调试 JSONL 的 requestRaw/responseRaw 里查到，result 只留可读摘要。
+function toolArgsSummary(obj) {
+  const compact = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const s = typeof v === 'string' ? v : JSON.stringify(v);
+    compact[k] = (s && s.length > 120) ? s.slice(0, 120) + `…(共${s.length}字)` : v;
+  }
+  let line;
+  try { line = JSON.stringify(compact); } catch { line = '(参数序列化失败)'; }
+  return line.length > 300 ? line.slice(0, 300) + '…' : line;
+}
+
+// result 用「完整回复 + 全量工具留痕」：模型旁白 + 本轮所有工具调用按流式顺序排列——
+//   写码工具（write_to_file/replace_in_file）→ `[工具名] 文件 \`路径\`：` + ``` 围栏代码块（不截断，按 code 去重）
+//   其余工具（read_file/todo_write/execute_command/delete_file 等）→ `> 调用 工具名: {参数摘要}` 单行留痕
+// 时序可排查"先读了什么→改了什么→跑了什么命令"；acceptResult 里的代码正是围栏块内容，口径一致。
+// 纯聊天/补全（无任何工具调用）时与旧 sseContent 完全一致，不改变既有行为。
 function sseFullReply(raw) {
-  const narration = sseJoinContent(raw);
-  const writes = toolCallsWrites(raw);
-  if (!writes.length) return narration;
+  const narration = sseJoinContent(raw).replace(/\s+$/, '');
+  const items = toolCallsAll(raw);
+  if (!items.length) return narration;
   const parts = [];
-  const head = narration.replace(/\s+$/, '');
-  if (head) parts.push(head);
-  for (const w of writes) {
-    const header = w.filePath ? '文件 `' + w.filePath + '`：' : '文件（未命名）：';
-    parts.push(header + '\n```\n' + w.code.replace(/\s+$/, '') + '\n```');
+  if (narration) parts.push(narration);
+  const seenCode = new Set();
+  for (const it of items) {
+    const code = codeOfToolCall(it.obj);
+    if (code) {
+      if (seenCode.has(code)) continue; // 同一次 write 重复发两遍只留一份
+      seenCode.add(code);
+      const fp = filePathOfToolCall(it.obj);
+      const label = (it.name ? '[' + it.name + '] ' : '') + (fp ? '文件 `' + fp + '`：' : '文件（未命名）：');
+      parts.push(label + '\n```\n' + code.replace(/\s+$/, '') + '\n```');
+    } else {
+      parts.push('> 调用 ' + (it.name || '(未知工具)') + ': ' + toolArgsSummary(it.obj));
+    }
   }
   return parts.join('\n\n');
 }

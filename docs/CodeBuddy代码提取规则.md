@@ -128,7 +128,7 @@ function extractGeneratedCode(raw):
 
 | 字段 | transform | 取什么 |
 |------|-----------|--------|
-| **result** | `sseFullReply` | **完整回复** = `delta.content` 旁白 + 每次工具写入的文件（以 ``` 围栏嵌入、上方标 `filePath`）。补全接口无工具时即 `choices[0].text` 全量 |
+| **result** | `sseFullReply` | **完整回复 + 全量工具留痕**：`delta.content` 旁白 + 本轮所有工具调用按流式顺序排列——写码工具为 `[工具名] 文件 \`路径\`：` + ``` 围栏代码块（不截断、按 code 去重），其余工具为 `> 调用 工具名: {参数摘要}` 单行（单值>120字/整行>300字截断，全文可查调试 JSONL）。纯聊天/补全无工具时即旧 `sseContent` 行为 |
 | **acceptResult** | `sseCodeAll` | **AI 实际产出代码**（上面"代码提取规则"：工具写入 ∪ 围栏 / 补全裸代码） |
 
 > 补全接口 `/v2/completions`：`result` 与 `acceptResult` 往往一致（都来自 `choices[0].text`）。
@@ -156,7 +156,7 @@ function extractGeneratedCode(raw):
 | 接口 | result（完整回复） | acceptResult（代码） | codeLines/codeSize |
 |------|------------------|---------------------|--------------------|
 | `/v2/completions` | `choices[0].text` 全量拼接 | 同左（补全裸代码即代码） | 按 acceptResult 算 |
-| `/v2/chat/completions` | `delta.content` 旁白 + 工具写入文件（围栏块，带 filePath） | 工具写入 `write_to_file.content` + `replace_in_file.new_str` ∪ 旁白围栏代码 | 按 acceptResult 算 |
+| `/v2/chat/completions` | `delta.content` 旁白 + 全量工具留痕（流序：写码工具=围栏块带 `[工具名]`+filePath，其余=`> 调用` 单行摘要） | 工具写入 `write_to_file.content` + `replace_in_file.new_str` ∪ 旁白围栏代码 | 按 acceptResult 算 |
 
 > **核心理念**：`acceptResult` 是"AI 实际写入本地文件的那部分代码"；`result` 是模型这轮回复的完整内容（含写入的文件）。两者任一为空都不上送。
 >
