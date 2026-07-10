@@ -7,7 +7,11 @@
 const settings = require('./settings');
 
 const PKG_VERSION = require('../package.json').version;
-const CACHE_MS = 10 * 60 * 1000; // 后端缓存 10 分钟：多标签页/频繁刷新不重复外呼（前端自身 2h 轮询）
+// 外呼节流窗口 + 后端自查间隔，跟随后端下发的 checkIntervalSeconds（下限10秒，默认2h）。
+// 让「后端任何变更（如延长 disableAt）」在一个间隔内即被前端/代理拿到并切换状态。
+const DEFAULT_INTERVAL_MS = 2 * 60 * 60 * 1000;
+const MIN_INTERVAL_MS = 10 * 1000;
+let intervalMs = DEFAULT_INTERVAL_MS;
 let cache = null; // { at, result }
 
 // 从任意版本串里提取「点分数字」段：'版本号：fat001- v1.0.2' → '1.0.2'。提不出返回 ''。
@@ -77,7 +81,7 @@ async function check(force) {
   const url = (settings.get().updateCheckUrl || '').trim();
   const current = currentVersion();
   if (!url) { disabledState = { managed: false, minVersion: '', downloadUrl: '', disableAtMs: 0 }; return { enabled: false, current }; }
-  if (!force && cache && Date.now() - cache.at < CACHE_MS) return cache.result;
+  if (!force && cache && Date.now() - cache.at < intervalMs) return cache.result;
 
   let result;
   try {
@@ -92,6 +96,9 @@ async function check(force) {
     const managed = !!minVersion && cmpVersion(current, minVersion) < 0;
     const disableAtMs = managed ? parseDisableAt(m.disableAt) : 0;
     const downloadUrl = typeof m.downloadUrl === 'string' ? m.downloadUrl : '';
+    // 外呼窗口/自查间隔跟随配置：配得越小，后端变更反映越快（下限10秒）；未配则回默认2h
+    const cis = toPosInt(m.checkIntervalSeconds);
+    intervalMs = cis ? Math.max(MIN_INTERVAL_MS, cis * 1000) : DEFAULT_INTERVAL_MS;
     disabledState = { managed, minVersion, downloadUrl, disableAtMs };
     result = {
       enabled: true,
@@ -120,9 +127,12 @@ async function check(force) {
   return result;
 }
 
-// 后端自查定时器：停用管控不能依赖用户开着面板。启动 2 秒后首查，此后每 2 小时。
-// unref：不阻止进程退出。检查地址未配置时 check() 直接返回，零开销。
-setTimeout(() => { check(false).catch(() => {}); }, 2000).unref();
-setInterval(() => { check(true).catch(() => {}); }, 2 * 60 * 60 * 1000).unref();
+// 后端自查：停用管控不能依赖用户开着面板。启动 2 秒后首查，之后按 intervalMs 自重排
+// （跟随 checkIntervalSeconds，故面板没开时代理也能在一个间隔内感知「延长/撤销 disableAt」等后端变更）。
+// unref：不阻止进程退出。检查地址未配置时 check() 直接返回、intervalMs 保持默认，零开销。
+function scheduleSelfCheck() {
+  setTimeout(() => { check(false).catch(() => {}); scheduleSelfCheck(); }, intervalMs).unref();
+}
+setTimeout(() => { check(false).catch(() => {}); scheduleSelfCheck(); }, 2000).unref();
 
 module.exports = { check, cmpVersion, extractVersion, currentVersion, isDisabled, disabledInfo };
