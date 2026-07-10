@@ -104,7 +104,7 @@ async function check(force) {
       disabled: isDisabled(),   // 当前是否已停用（倒计时到点即 true）
       downloadUrl,
       notes: typeof m.notes === 'string' ? m.notes : '',
-      checkIntervalMinutes: toPosInt(m.checkIntervalMinutes), // 前端轮询间隔(分钟)，后端下发；缺/非法=null→前端用默认
+      checkIntervalSeconds: toPosInt(m.checkIntervalSeconds), // 前端轮询间隔(秒)，后端下发；缺/非法=null→前端用默认
       checkedAt: Date.now(),
     };
   } catch (e) {
@@ -120,9 +120,9 @@ async function check(force) {
   return result;
 }
 
-// 后端自查定时器：停用管控不能依赖用户开着面板。启动 5 秒后首查，此后每 2 小时。
+// 后端自查定时器：停用管控不能依赖用户开着面板。启动 2 秒后首查，此后每 2 小时。
 // unref：不阻止进程退出。检查地址未配置时 check() 直接返回，零开销。
-setTimeout(() => { check(false).catch(() => {}); }, 5000).unref();
+setTimeout(() => { check(false).catch(() => {}); }, 2000).unref();
 setInterval(() => { check(true).catch(() => {}); }, 2 * 60 * 60 * 1000).unref();
 
 module.exports = { check, cmpVersion, extractVersion, currentVersion, isDisabled, disabledInfo };

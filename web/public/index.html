@@ -1515,9 +1515,8 @@ function toggleLan() {
 }
 
 // ── 新版本检查：横幅通知 + 手动检查 ──
-// 自动：页面加载时查一次 + 每 2 小时轮询（走后端 /api/update/check，后端有 10 分钟缓存）。
-// 「不再提醒」按版本号记 localStorage——出了更新的版本会重新弹。手动检查无视该标记并强制刷新。
-const UPD_DISMISS_KEY = 'updDismissVersion';
+// 自动：页面加载时查一次 + 按 checkIntervalSeconds 轮询（走后端 /api/update/check，后端有 10 分钟缓存）。
+// 有新版即【常驻显示】（刷新后仍在），直到升级/后端撤下才隐藏——不提供「不再提醒」。
 let _updCountdownTimer = null;
 function clearUpdCountdown() { if (_updCountdownTimer) { clearInterval(_updCountdownTimer); _updCountdownTimer = null; } }
 // 停用绝对时刻(ms) → 本地日期串（用浏览器本地时区显示，后端下发的是带时区的绝对时刻）
@@ -1571,13 +1570,6 @@ function renderUpdateBanner(u) {
     a.className = 'upd-dl'; a.textContent = '⬇ 下载新版';
     b.append(a);
   }
-  if (!u.disabled && !counting) { // 只有普通更新可关闭；停用/倒计时不可关闭
-    const d = document.createElement('a');
-    d.href = 'javascript:void(0)'; d.className = 'upd-dismiss';
-    d.textContent = '本版本不再提醒';
-    d.onclick = () => dismissUpdate(u.latest);
-    b.append(d);
-  }
   b.style.display = '';
   if (counting) {
     const tick = () => {
@@ -1590,17 +1582,13 @@ function renderUpdateBanner(u) {
     _updCountdownTimer = setInterval(tick, 1000);
   }
 }
-function dismissUpdate(version) {
-  localStorage.setItem(UPD_DISMISS_KEY, version);
-  document.getElementById('updateBanner').style.display = 'none';
-}
 async function checkUpdate(force, manual) {
   let u;
   try { u = await fetch('/api/update/check' + (force ? '?force=1' : '')).then(x => x.json()); }
   catch { if (manual) showToast('检查更新失败：网络错误'); return; }
-  // 轮询间隔由后端字段 checkIntervalMinutes 配置（下限1分钟）；缺省则保持当前值。下次自动轮询即按此重排。
-  if (u && typeof u.checkIntervalMinutes === 'number' && u.checkIntervalMinutes > 0) {
-    UPD_INTERVAL_MS = Math.max(60000, Math.round(u.checkIntervalMinutes * 60000));
+  // 轮询间隔由后端字段 checkIntervalSeconds 配置（下限10秒）；缺省则保持当前值。下次自动轮询即按此重排。
+  if (u && typeof u.checkIntervalSeconds === 'number' && u.checkIntervalSeconds > 0) {
+    UPD_INTERVAL_MS = Math.max(10000, Math.round(u.checkIntervalSeconds * 1000));
   }
   // 停用 / 停用倒计时：强制显示，无视"不再提醒"
   if (u.disabled || (u.managed && u.disableAt > 0)) { renderUpdateBanner(u); return; }
@@ -1611,8 +1599,7 @@ async function checkUpdate(force, manual) {
     renderUpdateBanner(u); // 手动检查无视"不再提醒"
     return;
   }
-  if (u.hasUpdate && localStorage.getItem(UPD_DISMISS_KEY) !== u.latest) renderUpdateBanner(u);
-  else if (!u.hasUpdate) renderUpdateBanner(u); // 解除管控/已升级后隐藏横幅
+  renderUpdateBanner(u); // 有新版即常驻显示（刷新后仍在），无新版/已升级则自动隐藏
 }
 function manualCheckUpdate() { checkUpdate(true, true); }
 // 轮询间隔可由后端字段 checkIntervalMinutes 配置（默认2h，下限1分钟）；每次 check 后按最新值重排下一次
