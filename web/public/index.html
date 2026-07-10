@@ -1547,22 +1547,23 @@ function renderUpdateBanner(u) {
       ? ['linear-gradient(90deg,#b7791f,#d29922)', '0 2px 8px rgba(210,153,34,.5)', '⏳']
       : ['linear-gradient(90deg,#1f6feb,#388bfd)', '0 2px 8px rgba(31,111,235,.45)', '🔔'];
   b.style.background = style[0]; b.style.boxShadow = style[1];
+  // 更新说明后缀：notes 字段只填正文，界面自动拼上「更新说明：」标签
+  const notesSuffix = u.notes ? '　更新说明：' + u.notes : '';
   // DOM API 组装（后端返回内容不进 innerHTML，天然免注入）
   const bell = document.createElement('span');
   bell.className = 'upd-bell'; bell.textContent = style[2];
   b.append(bell);
   if (u.disabled) {
-    b.append('当前版本 v' + u.current + ' 已停用（最低要求 v' + u.minVersion + '），代理已暂停转发新请求，请立即升级并重启'
-      + (u.notes ? '：' + u.notes : ''));
+    b.append('当前版本 v' + u.current + ' 已停用（最低要求 v' + u.minVersion + '），代理已暂停转发新请求，请立即升级并重启！' + notesSuffix);
   } else if (counting) {
     b.append('当前版本 v' + u.current + ' 将于 ' + fmtDisableAt(u.disableAt) + ' 停用，剩 ');
     const cd = document.createElement('span');
     cd.id = 'updCountdown';
     cd.style.cssText = 'font-weight:800;background:rgba(0,0,0,.22);padding:1px 7px;border-radius:4px;font-variant-numeric:tabular-nums';
     b.append(cd);
-    b.append('，请尽快升级' + (u.notes ? '：' + u.notes : ''));
+    b.append('，请尽快升级！' + notesSuffix);
   } else {
-    b.append('发现新版本 v' + u.latest + '（当前 v' + u.current + '）' + (u.notes ? '：' + u.notes : ''));
+    b.append('发现新版本 v' + u.latest + '（当前 v' + u.current + '）' + notesSuffix);
   }
   if (u.downloadUrl) {
     const a = document.createElement('a');
