@@ -1598,6 +1598,10 @@ async function checkUpdate(force, manual) {
   let u;
   try { u = await fetch('/api/update/check' + (force ? '?force=1' : '')).then(x => x.json()); }
   catch { if (manual) showToast('检查更新失败：网络错误'); return; }
+  // 轮询间隔由后端字段 checkIntervalMinutes 配置（下限1分钟）；缺省则保持当前值。下次自动轮询即按此重排。
+  if (u && typeof u.checkIntervalMinutes === 'number' && u.checkIntervalMinutes > 0) {
+    UPD_INTERVAL_MS = Math.max(60000, Math.round(u.checkIntervalMinutes * 60000));
+  }
   // 停用 / 停用倒计时：强制显示，无视"不再提醒"
   if (u.disabled || (u.managed && u.disableAt > 0)) { renderUpdateBanner(u); return; }
   if (manual) {
@@ -1611,8 +1615,14 @@ async function checkUpdate(force, manual) {
   else if (!u.hasUpdate) renderUpdateBanner(u); // 解除管控/已升级后隐藏横幅
 }
 function manualCheckUpdate() { checkUpdate(true, true); }
-checkUpdate(false, false);
-setInterval(() => checkUpdate(false, false), 2 * 60 * 60 * 1000);
+// 轮询间隔可由后端字段 checkIntervalMinutes 配置（默认2h，下限1分钟）；每次 check 后按最新值重排下一次
+let UPD_INTERVAL_MS = 2 * 60 * 60 * 1000;
+let _updPollTimer = null;
+function scheduleNextUpdCheck() {
+  if (_updPollTimer) clearTimeout(_updPollTimer);
+  _updPollTimer = setTimeout(() => checkUpdate(false, false).then(scheduleNextUpdCheck), UPD_INTERVAL_MS);
+}
+checkUpdate(false, false).then(scheduleNextUpdCheck);
 
 // 调试落盘(JSONL)开关（仅管理员，随「保存设置」持久化，保存后即生效）
 let debugLogEnabled = false;

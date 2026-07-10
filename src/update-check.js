@@ -52,6 +52,12 @@ function parseDisableAt(v) {
   return Number.isNaN(t) ? 0 : t;
 }
 
+// 正整数解析：用于 checkIntervalMinutes 等。非正/非数字 → null（前端据此回退默认）。
+function toPosInt(v) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 // 版本停用管控状态（供 proxy 每请求实时查询）。仅「成功拿到检查结果」时更新；
 // 失败保持上一次状态（fail-open，服务不可达不误伤）。
 //   managed     本地版本是否受管控（低于 minVersion）
@@ -98,6 +104,7 @@ async function check(force) {
       disabled: isDisabled(),   // 当前是否已停用（倒计时到点即 true）
       downloadUrl,
       notes: typeof m.notes === 'string' ? m.notes : '',
+      checkIntervalMinutes: toPosInt(m.checkIntervalMinutes), // 前端轮询间隔(分钟)，后端下发；缺/非法=null→前端用默认
       checkedAt: Date.now(),
     };
   } catch (e) {
