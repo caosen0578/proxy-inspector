@@ -408,7 +408,7 @@ tbody td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflo
           <span id="debugLogToggleLabel" style="font-size:13px;color:#c9d1d9">调试落盘(JSONL)：关闭</span>
           <button type="button" onclick="downloadDebugLog()" style="margin-left:auto;font-size:12px;padding:3px 10px">下载 JSONL</button>
         </div>
-        <p style="color:#8b949e;font-size:11px;margin:2px 0 10px">开启后，每条<b>需要上送的记录</b>会同步追加到本地 <code>upload-debug-log.jsonl</code>（每行一条 JSON，字段：time / id / requestId / prompt / result / acceptResult / requestRaw / responseRaw；<code>id</code> 与抓包页记录 id 对应，可 grep/jq 搜索）。<span style="color:#f85149">⚠ 会把 prompt 与产出代码明文写盘，仅本机排查用，用完请关。保存后生效。</span></p>
+        <p style="color:#8b949e;font-size:11px;margin:2px 0 10px">开启后，每条<b>需要上送的记录</b>会同步追加到本地 <code>upload-debug-log.jsonl</code>（每行一条 JSON，字段：time / id / requestId / prompt / result / acceptResult / codeLines / codeSize / acceptCodeLines / acceptCodeSize / requestRaw / responseRaw；<code>id</code> 与抓包页记录 id 对应，可 grep/jq 搜索）。<span style="color:#f85149">⚠ 会把 prompt 与产出代码明文写盘，仅本机排查用，用完请关。保存后生效。</span></p>
 
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
           <div class="toggle" id="reportToggle" onclick="toggleReporter()"></div>

@@ -106,6 +106,11 @@ class Reporter extends EventEmitter {
         prompt: body.prompt,
         result: body.result,
         acceptResult: body.acceptResult,
+        // 上送的代码计数（与实际上送同值，便于核对行数/大小是否正确）
+        codeLines: body.codeLines,
+        codeSize: body.codeSize,
+        acceptCodeLines: body.acceptCodeLines,
+        acceptCodeSize: body.acceptCodeSize,
         requestRaw: record.requestBody || '',    // 请求完整报文体
         responseRaw: record.responseBody || '',  // 响应完整报文体（SSE 原文，供取证复现代码提取）
       });

@@ -5,6 +5,7 @@
 //
 // 格式：JSONL —— 每条记录一行 JSON（换行/逗号等一律转义进字符串，永不错位，grep/jq/pandas 都好处理）。
 // 字段：time(ISO时间) id(=抓包页记录 id，可搜索对应) requestId prompt result acceptResult
+//       codeLines codeSize acceptCodeLines acceptCodeSize(与上送同值，便于核对代码计数)
 //       requestRaw(请求完整报文体) responseRaw(响应完整报文体/SSE 原文，供取证复现)
 const fs = require('fs');
 const path = require('path');
