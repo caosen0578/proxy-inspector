@@ -98,6 +98,21 @@ function load() {
         savedResult.transform = 'sseFullReply';
         console.log('[settings] 映射迁移: result sseContent → sseFullReply（补齐工具写入代码）');
       }
+      // 迁移：修复/补齐 acceptCodeLines、acceptCodeSize（2026-07，后端按必填校验且用于采纳统计）。
+      // 实测事故：早期 UI 不认识 field 源，用户在字段映射页保存一次就把 path 吞掉
+      // （残留 {source:'field',transform:lineCount} 无 path）→ getByPath(out,undefined)=undefined
+      // → 计数恒 0 上送。此处自愈：field 源缺 path 的补 path:'acceptResult'；整个字段缺失的按默认补。
+      const savedMapping = state.reporterTargets.saveRecord.mapping;
+      [['acceptCodeLines', 'lineCount'], ['acceptCodeSize', 'byteSize']].forEach(([f, tr]) => {
+        const spec = savedMapping[f];
+        if (spec && spec.source === 'field' && !spec.path) {
+          spec.path = 'acceptResult';
+          console.log(`[settings] 映射迁移: ${f} 补回丢失的 path=acceptResult（此前计数恒 0）`);
+        } else if (!spec && Object.keys(savedMapping).length) {
+          savedMapping[f] = { source: 'field', path: 'acceptResult', transform: tr };
+          console.log(`[settings] 映射迁移: 补齐缺失字段 ${f}（后端必填）`);
+        }
+      });
       // 非手动设置则始终按当前机器重新探测（防止拷贝来的 settings.json 带着别人的用户名）
       if (!state.umAccountManual || !state.umAccount) state.umAccount = detectUm();
       // 统一小写：兼容历史 settings.json 里存的大写用户名

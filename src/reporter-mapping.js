@@ -396,9 +396,17 @@ function toSaveRecord(record, opts = {}) {
     resText: record.responseBody || '',
     record,
     config: opts.config || {},
-    out, // 供 source:'field' 引用已解析字段——依赖字段（如 acceptResult）须在映射里排在引用者之前
+    out, // 供 source:'field' 引用已解析字段
   };
+  // 两遍解析：先解析全部非 field 源，再解析 field 源（引用同条其它字段，如 acceptCodeLines→acceptResult）。
+  // 这样 field 引用与映射里的键顺序无关——实测用户在 UI 保存过的映射键顺序不可控，
+  // 单遍按序解析时 field 排在被引用字段之前会取到空 → 计数全 0 上送。
+  const fieldSpecs = [];
   for (const [field, spec] of Object.entries(mapping)) {
+    if (spec && spec.source === 'field') { fieldSpecs.push([field, spec]); continue; }
+    out[field] = resolveField(spec, ctx);
+  }
+  for (const [field, spec] of fieldSpecs) {
     out[field] = resolveField(spec, ctx);
   }
   return out;
