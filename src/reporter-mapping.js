@@ -344,8 +344,10 @@ const DEFAULT_MAPPING = {
   //    → 接口报 "Cannot deserialize Integer from String"。切勿手动映射成裸 resText！
   promptSize:         { source: 'reqText', transform: 'promptSize' },
   promptMd5:          { source: 'reqText', transform: 'promptMd5' },
-  codeLines:          { source: 'resText', transform: 'sseCodeLines' },
-  codeSize:           { source: 'resText', transform: 'sseCodeSize' },
+  // 计数口径（2026-07-11 定）：计数字段与文本字段一一对应——
+  //   codeLines/codeSize 数 result（完整回复），acceptCodeLines/acceptCodeSize 数 acceptResult（接受的代码）。
+  codeLines:          { source: 'field', path: 'result', transform: 'lineCount' },
+  codeSize:           { source: 'field', path: 'result', transform: 'byteSize' },
   // acceptCodeLines/acceptCodeSize：接口文档标"否"但后端实际按必填校验。被动代理拿不到
   // "用户真实采纳量"，按 acceptResult 的取值直接计数（source:'field'）——acceptResult 若被改映射，这俩自动跟随。
   acceptCodeLines:    { source: 'field', path: 'acceptResult', transform: 'lineCount' },

@@ -113,6 +113,16 @@ function load() {
           console.log(`[settings] 映射迁移: 补齐缺失字段 ${f}（后端必填）`);
         }
       });
+      // 迁移：计数口径改为「计数字段与文本字段一一对应」（2026-07-11）——
+      // codeLines/codeSize 数 result（完整回复），不再数提取出的代码（那与 acceptCodeLines 恒等，无区分意义）。
+      // 只动"恰好还是旧默认形态"（resText+sseCodeLines/sseCodeSize）的，用户自定义的不碰。
+      [['codeLines', 'sseCodeLines', 'lineCount'], ['codeSize', 'sseCodeSize', 'byteSize']].forEach(([f, oldTr, newTr]) => {
+        const spec = savedMapping[f];
+        if (spec && spec.source === 'resText' && spec.transform === oldTr) {
+          savedMapping[f] = { source: 'field', path: 'result', transform: newTr };
+          console.log(`[settings] 映射迁移: ${f} 改为按 result 计数（${oldTr} → field/result/${newTr}）`);
+        }
+      });
       // 非手动设置则始终按当前机器重新探测（防止拷贝来的 settings.json 带着别人的用户名）
       if (!state.umAccountManual || !state.umAccount) state.umAccount = detectUm();
       // 统一小写：兼容历史 settings.json 里存的大写用户名

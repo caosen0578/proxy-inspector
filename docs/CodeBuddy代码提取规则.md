@@ -153,11 +153,15 @@ function extractGeneratedCode(raw):
 
 ## 六、对照表
 
-| 接口 | result（完整回复） | acceptResult（代码） | codeLines/codeSize |
+| 接口 | result（完整回复） | acceptResult（代码） | 计数字段 |
 |------|------------------|---------------------|--------------------|
-| `/v2/completions` | `choices[0].text` 全量拼接 | 同左（补全裸代码即代码） | 按 acceptResult 算 |
-| `/v2/chat/completions` | `delta.content` 旁白 + 全量工具留痕（流序：写码工具=围栏块带 `[工具名]`+filePath，其余=`> 调用` 单行摘要） | 工具写入 `write_to_file.content` + `replace_in_file.new_str` ∪ 旁白围栏代码 | 按 acceptResult 算 |
+| `/v2/completions` | `choices[0].text` 全量拼接 | 同左（补全裸代码即代码） | 见下计数口径（两对相等，回复即代码） |
+| `/v2/chat/completions` | `delta.content` 旁白 + 全量工具留痕（流序：写码工具=围栏块带 `[工具名]`+filePath，其余=`> 调用` 单行摘要） | 工具写入 `write_to_file.content` + `replace_in_file.new_str` ∪ 旁白围栏代码 | 见下计数口径 |
 
+> **计数口径（2026-07-11 定）**：计数字段与文本字段一一对应——`codeLines`/`codeSize` 数 **result**（完整回复），
+> `acceptCodeLines`/`acceptCodeSize` 数 **acceptResult**（接受的代码）。两对由此有真实差异
+> （旁白/留痕行只计入 codeLines），采纳率 = acceptCodeLines/codeLines 有梯度。
+>
 > **核心理念**：`acceptResult` 是"AI 实际写入本地文件的那部分代码"；`result` 是模型这轮回复的完整内容（含写入的文件）。两者任一为空都不上送。
 >
 > **被动抓包的固有边界**：`replace_in_file` 只有 `new_str`（改动块），合并后的**整文件内容留在 IDE 本地、不经过网络**，无法补齐；`execute_command` 若用 shell 写文件也抓不到"生成代码"。
