@@ -52,7 +52,7 @@ result = 所有 SSE chunk 的 choices[0].text 拼接
 
 ## 三、`/v2/chat/completions` — Craft/Agent 对话接口
 
-### 代码提取规则（三级优先级）
+### 代码提取规则（工具代码 ∪ 围栏代码，2026-07 起为并集）
 
 **优先级 1：工具调用写入代码（最高）**
 
