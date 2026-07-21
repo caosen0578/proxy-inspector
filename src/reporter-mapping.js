@@ -277,6 +277,9 @@ const TRANSFORMS = {
   isoDate(v) { const d = new Date(v ?? Date.now()); return isNaN(d) ? null : d.toISOString(); },
   string(v) { return v == null ? null : (typeof v === 'string' ? v : JSON.stringify(v)); },
   number(v) { const n = Number(v); return isNaN(n) ? null : n; },
+  // 给取值加 "Codebuddy-" 前缀（scope 用）：不论 x-ide-type 取到什么，都标明是 CodeBuddy 插件。
+  // 取不到值时返回 "Codebuddy"（不留尾巴 "Codebuddy-"）。
+  prefixCodebuddy(v) { const s = v == null ? '' : String(v).trim(); return s ? 'Codebuddy-' + s : 'Codebuddy'; },
   // —— SSE 流式响应（作用于原始响应文本，配合 source:'resText'）——
   // 同时兼容对话格式（choices[].delta.content）与补全格式（choices[].text）
   sseContent(raw) { return sseJoinContent(raw); },
@@ -327,7 +330,7 @@ const DEFAULT_MAPPING = {
   result:             { source: 'resText', transform: 'sseFullReply' }, // 完整回复：旁白 + 工具写入的文件(围栏块)
   acceptResult:       { source: 'resText', transform: 'sseCodeAll' },  // AI 实际产出代码（与 result 中围栏块同源）
   prompt:             { source: 'reqText', transform: 'promptAny' }, // 对话 messages / 补全 prompt 都兼容
-  scope:              { source: 'record', path: 'requestHeaders.x-ide-type' },
+  scope:              { source: 'record', path: 'requestHeaders.x-ide-type', transform: 'prefixCodebuddy' },
   isStatistics:       { source: 'const',  value: 1 },
   modelName:          { source: 'resText', transform: 'sseModel' },
   promptTokens:       { source: 'resText', transform: 'ssePromptTokens' },

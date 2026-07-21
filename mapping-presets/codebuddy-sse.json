@@ -7,7 +7,7 @@
   "result":            { "source": "resText", "transform": "sseFullReply" },
   "acceptResult":      { "source": "resText", "transform": "sseCodeAll" },
   "prompt":            { "source": "reqText", "transform": "promptAny" },
-  "scope":             { "source": "record",  "path": "requestHeaders.x-ide-type" },
+  "scope":             { "source": "record",  "path": "requestHeaders.x-ide-type", "transform": "prefixCodebuddy" },
   "isStatistics":      { "source": "const",   "value": 1 },
   "modelName":         { "source": "resText", "transform": "sseModel" },
   "promptTokens":      { "source": "resText", "transform": "ssePromptTokens" },

@@ -1682,7 +1682,7 @@ async function saveReportSettings() {
 // ── 字段映射（按上送目标接口 + 文档 schema 驱动）─────────
 const MAP_SOURCES = ['','um','const','uuid','config','req','res','reqText','resText','record','field']; // '' = 不映射
 const SOURCE_LABEL = { '':'— 不映射', um:'UM号(系统用户名)', const:'const 固定值', uuid:'uuid', config:'config 配置项', req:'req 请求体', res:'res 响应体', reqText:'reqText 请求原文', resText:'resText 响应原文', record:'record 元数据', field:'field 引用本条已解析字段' };
-const MAP_TRANSFORMS = ['','joinMessages','promptAny','promptSize','promptMd5','isoDate','string','number','sseContent','sseCode','sseToolCode','sseCodeAll','sseCodeLines','sseCodeSize','lineCount','byteSize','extractCode','sseModel','sseFinishReason','ssePromptTokens','sseCompletionTokens','sseTotalTokens'];
+const MAP_TRANSFORMS = ['','joinMessages','promptAny','promptSize','promptMd5','isoDate','string','number','sseContent','sseCode','sseToolCode','sseCodeAll','sseCodeLines','sseCodeSize','lineCount','byteSize','prefixCodebuddy','extractCode','sseModel','sseFinishReason','ssePromptTokens','sseCompletionTokens','sseTotalTokens'];
 const ARG_HINT = { '':'(不映射)', um:'(自动取右上角 UM 号)', const:'固定值', config:'配置键，如 reporterTriggerVersion', req:'请求体路径，如 model', res:'响应体路径，如 choices.0.message.content', record:'元数据，如 statusCode / requestHeaders.x-user-id', uuid:'(无需填)', reqText:'(整段请求文本)', resText:'(整段响应文本)', field:'本条已解析的目标字段名，如 acceptResult（必填，顺序无关）' };
 const ARG_DISABLED_SRC = ['','um','uuid','reqText','resText'];
 const TARGET_HINTS = {

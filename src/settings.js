@@ -123,6 +123,13 @@ function load() {
           console.log(`[settings] 映射迁移: ${f} 改为按 result 计数（${oldTr} → field/result/${newTr}）`);
         }
       });
+      // 迁移：scope 加 "Codebuddy-" 前缀（2026-07-11）——不论 x-ide-type 取到什么都标明是 CodeBuddy 插件。
+      // 只动"恰好还是旧默认形态"（record + path x-ide-type + 无 transform）的，用户自定义的不碰。
+      const savedScope = savedMapping.scope;
+      if (savedScope && savedScope.source === 'record' && savedScope.path === 'requestHeaders.x-ide-type' && !savedScope.transform) {
+        savedScope.transform = 'prefixCodebuddy';
+        console.log('[settings] 映射迁移: scope 加 Codebuddy- 前缀');
+      }
       // 非手动设置则始终按当前机器重新探测（防止拷贝来的 settings.json 带着别人的用户名）
       if (!state.umAccountManual || !state.umAccount) state.umAccount = detectUm();
       // 统一小写：兼容历史 settings.json 里存的大写用户名
