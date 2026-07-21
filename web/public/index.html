@@ -2158,8 +2158,9 @@ async function editUm() {
   const v = prompt('UM 号（系统用户名，作为上送 createdBy）：', umAccount);
   if (v === null) return;
   const next = v.trim();
-  await fetch('/api/settings', { method:'PUT', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ umAccount: next }) });
-  umAccount = next;
+  // UM 走专用端点（不需管理员），分发副本里普通用户也能改自己的 UM
+  const r = await fetch('/api/um', { method:'POST', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ umAccount: next }) }).then(x => x.json()).catch(() => null);
+  umAccount = (r && r.umAccount != null) ? r.umAccount : next;
   document.getElementById('umValue').textContent = umAccount || '(未设置)';
 }
 

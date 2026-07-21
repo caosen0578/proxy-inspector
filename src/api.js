@@ -105,6 +105,13 @@ function buildRouter() {
   // 写入：仅管理员（含上送地址/Token/字段映射等敏感配置）
   r.put('/settings', requireAdmin, (req, res) => res.json(settings.update(req.body || {})));
 
+  // UM 号单独放行（不需管理员）：它只是上送 createdBy，人人本就该能改自己的；
+  // 只接受 umAccount 一个字段，不能借此改其它敏感配置。
+  r.post('/um', (req, res) => {
+    const umAccount = (req.body && req.body.umAccount) || '';
+    res.json({ umAccount: settings.update({ umAccount }).umAccount });
+  });
+
   // 新版本检查：拉内网 version.json 与本地版本比较（所有人可查，横幅通知用；
   // 检查地址 updateCheckUrl 的修改仍仅管理员）。?force=1 跳过后端缓存（手动「检查更新」）。
   r.get('/update/check', async (req, res) => {
