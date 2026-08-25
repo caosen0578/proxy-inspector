@@ -7,6 +7,7 @@ reporter-queue.json
 rules.json
 last-upload-debug.json
 upload-debug-log*
+upstream-probe.jsonl
 *.log
 
 # 打包输出
