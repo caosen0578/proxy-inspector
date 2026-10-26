@@ -10,12 +10,14 @@
     "postinstall": "patch-package"
   },
   "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "axios": "^1.6.7",
+    "docx": "^9.7.1",
     "express": "^4.18.2",
     "http-mitm-proxy": "^0.9.0",
-    "ws": "^8.16.0",
     "minimatch": "^9.0.4",
-    "axios": "^1.6.7",
-    "node-forge": "^1.3.1"
+    "node-forge": "^1.3.1",
+    "ws": "^8.16.0"
   },
   "devDependencies": {
     "patch-package": "^8.0.1"

@@ -1,0 +1,8 @@
+# Windows 批处理必须 CRLF：LF 会让 cmd.exe 按字节偏移读取时错位，
+# 导致 chcp/@echo off 不生效、中文按 GBK 乱码、行尾片段被当成命令执行。
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Shell 脚本必须 LF（麒麟/信创终端运行）
+*.sh  text eol=lf

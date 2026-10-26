@@ -37,3 +37,23 @@ docjpg/*.png
 
 # 环境配置(含 token，勿入库/勿分发)
 env/
+target/
+*/target/
+*/target
+.vscode/
+logs/
+.DS_Store
+Thumbs.db
+.claude/worktrees/
+.git-credentials
+*.iml
+.pkgmove-backup/
+*.exe
+*.dll
+*.so
+*.dylib
+*.zip
+*.rar
+*.7z
+proxy-inspector/docjpg/
+docjpg/
